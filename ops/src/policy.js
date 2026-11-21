@@ -12,18 +12,22 @@ export function validateRequest(request) {
   const args = request.args ?? {};
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw Error('INVALID_ARGS');
   if (request.action.startsWith('allowlist_')) {
-    if (Object.keys(args).length !== 1 || !NAME.test(args.username)) throw Error('INVALID_USERNAME');
+    const keys = Object.keys(args);
+    // RegExp.test coerces its input: undefined, null, numbers and one-element arrays must not pass.
+    if (keys.length !== 1 || keys[0] !== 'username' || typeof args.username !== 'string' || !NAME.test(args.username)) throw Error('INVALID_USERNAME');
   } else if (Object.keys(args).length) throw Error('UNEXPECTED_ARGS');
   return { requestId: request.requestId, action: request.action,
     args: request.action.startsWith('allowlist_') ? { username: args.username } : {},
     requiresConfirmation: CONFIRM.has(request.action), unattended: AUTO.has(request.action) };
 }
-export function authorize(request, principal, confirmation) {
+// Principal and confirmation must be objects minted by the transport's TrustRoot.
+// Field values such as authenticated/verified flags are never evidence of authority.
+export function authorize(request, principal, confirmation, trust) {
+  if (!trust || typeof trust.isPrincipal !== 'function' || typeof trust.isConfirmation !== 'function') throw Error('TRUST_ROOT_REQUIRED');
   const operation = validateRequest(request);
-  // Principal must come from an authenticated transport, not from LLM output.
-  if (!principal || principal.authenticated !== true || principal.role !== 'saracraft_operator') throw Error('UNAUTHORIZED');
-  if (operation.requiresConfirmation && (!confirmation ||
+  if (!trust.isPrincipal(principal) || principal.role !== 'saracraft_operator') throw Error('UNAUTHORIZED');
+  if (operation.requiresConfirmation && (!trust.isConfirmation(confirmation) ||
     confirmation.requestId !== operation.requestId || confirmation.action !== operation.action ||
-    confirmation.approvedBy !== principal.id || confirmation.verified !== true)) throw Error('CONFIRMATION_REQUIRED');
+    confirmation.approvedBy !== principal.id || !(trust.now() < confirmation.expiresAt))) throw Error('CONFIRMATION_REQUIRED');
   return operation;
 }
