@@ -1,4 +1,22 @@
 // Narrow OpenAI-compatible provider. Configuration is trusted, model output is not.
+const MAX_RESPONSE_BYTES = 16384;
+// Stream the body and stop reading once the byte cap is exceeded, so an oversized or
+// hostile response cannot be buffered in full before it is rejected.
+async function readBounded(response) {
+  const declared = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) throw Error('RESPONSE_TOO_LARGE');
+  const reader = response.body?.getReader?.();
+  if (!reader) throw Error('INVALID_PROVIDER_JSON');
+  const chunks = []; let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) { reader.cancel().catch(() => {}); throw Error('RESPONSE_TOO_LARGE'); }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
 export class ChatProvider {
   #endpoint; #model; #key; #fetch; #timeoutMs; #maxTokens;
   constructor({ endpoint, model, apiKey = '', fetchImpl = fetch, timeoutMs = 12000, maxTokens = 180 }) {
@@ -24,13 +42,13 @@ export class ChatProvider {
     if (signal?.aborted) ac.abort();
     signal?.addEventListener('abort',abort,{once:true});
     try {
-      const response=await this.#fetch(this.#endpoint,{method:'POST',signal:ac.signal,
+      // redirect:'error' keeps the request body and credentials pinned to the configured origin.
+      const response=await this.#fetch(this.#endpoint,{method:'POST',signal:ac.signal,redirect:'error',
         headers:{'Content-Type':'application/json',...(this.#key?{Authorization:`Bearer ${this.#key}`}:{})},
         body:JSON.stringify({model:this.#model,messages,stream:false,temperature:0,
           max_tokens:this.#maxTokens,response_format:{type:'json_object'}})});
       if (!response.ok) throw Error('PROVIDER_FAILURE');
-      const raw=await response.text();
-      if (raw.length > 16384) throw Error('RESPONSE_TOO_LARGE');
+      const raw=await readBounded(response);
       let data;
       try { data=JSON.parse(raw); } catch { throw Error('INVALID_PROVIDER_JSON'); }
       const content=data?.choices?.[0]?.message?.content;
