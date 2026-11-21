@@ -1,0 +1,8 @@
+{
+  "name": "@saracraft/controller",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test", "check": "node --check src/controller.js && node --check src/commands.js && node --check src/bridge.js" }
+}
