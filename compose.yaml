@@ -1,0 +1,21 @@
+# Design template only; requires separate approval before launch.
+services:
+  minecraft:
+    image: itzg/minecraft-server:java21
+    profiles: ["deploy"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:25565:25565"
+    environment:
+      EULA: "${MC_EULA:-FALSE}"
+      TYPE: PAPER
+      VERSION: "1.21.11"
+      MEMORY: 4G
+      ONLINE_MODE: "TRUE"
+      DIFFICULTY: normal
+      MODE: survival
+      MAX_PLAYERS: 4
+      ENABLE_RCON: "FALSE"
+      MOTD: "SaraCraft private survival"
+    volumes:
+      - ./runtime/world:/data
