@@ -1,4 +1,4 @@
-name: Controller unit tests
+name: Controller and connection unit tests
 on:
   pull_request:
     paths:
@@ -12,15 +12,26 @@ permissions:
 jobs:
   controller:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - name: Syntax check
+      - name: Controller syntax check
         run: npm run check
         working-directory: controller
-      - name: Unit tests
+      - name: Controller unit tests
         run: npm test
         working-directory: controller
+      - name: Connection dependency installation
+        run: npm ci --ignore-scripts
+        working-directory: controller/connection
+      - name: Connection syntax check
+        run: |
+          node --check main.js
+          node --check connection.js
+        working-directory: controller/connection
+      - name: Connection unit tests
+        run: npm test
+        working-directory: controller/connection
