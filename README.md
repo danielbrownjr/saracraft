@@ -1,23 +1,27 @@
 # SaraCraft
 
-Private Minecraft Java AI companion project for cooperative survival.
+A private Minecraft Java AI companion project for cooperative survival.
 
-**Current state:** M0 design scaffold, no bot runtime, no deployment or integration test.
+**Status (2026-11-21): M0.1 design only.** No Minecraft server, bot, controller or paid API has been installed or deployed by this project work.
 
-## Decisions
-- New survival world, Normal difficulty, Paper server.
-- Minecraft 1.21.11 is **provisional**, pending exact upstream compatibility checks.
-- Hosted LLM API first, optional Ollama backend later.
-- Mineflayer/Mindcraft CE evaluated and pinned before bot implementation.
-- Private LAN/WireGuard, online-mode authentication, separate licensed account for Sara.
-- No arbitrary model-generated code execution or untrusted chat-to-admin path.
+## Design choices
 
-## Layout
-- `compose.yaml`: disabled-by-default server template; DO NOT deploy until approved.
-- `docs/architecture.md`: architecture and security boundaries.
-- `docs/M0-acceptance.md`: measurable first playable checks.
-- `docs/implementation-backlog.md`: ordered implementation work.
-- `bot/profiles/sara.profile.example.json`: non-executable persona concept, NOT a verified upstream schema.
-- `scripts/claude-setup.sh`: inspection-only cloud environment prerequisite script.
+- New Java survival world, Normal difficulty; candidate protocol 1.21.11 and Java 21.
+- Paper on Hephaestus N100, Mineflayer/Mindcraft CE bot and controller there; hosted API initially, local Ollama later.
+- Private LAN/WireGuard ingress; online mode, enforced allowlist, distinct licensed accounts, bot not op.
+- Model proposes bounded intent; controller independently authorizes it and provides out-of-band STOP.
+- World stored on Heph local NVMe, off-host NAS backup with tested restore before acceptance.
+- No model-generated code execution, admin access, or trusting in-game names for identity.
 
-No live service is installed, configured or running. No API keys belong in this repository.
+## Design documents
+
+- [M0 acceptance](docs/M0-acceptance.md)
+- [Compatibility matrix](docs/compatibility-matrix.md)
+- [Host and security design](docs/host-and-security-design.md)
+- [Controller contract](docs/controller-contract.md)
+- [Architecture](docs/architecture.md)
+- [Implementation backlog](docs/implementation-backlog.md)
+
+`compose.yaml` is a **nondeployable-by-default design template**. Deployment requires explicit approval, EULA acceptance, verified private bind IP, authenticated allowlist, immutable image digest, and a reviewed build. The illustrative bot profile is not a validated Mindcraft CE schema. No credentials belong in Git.
+
+Next gate: pinned integration dependencies and implementation of the authenticated bot/controller before real runtime testing.
