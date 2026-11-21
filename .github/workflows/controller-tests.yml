@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'controller/**'
+      - 'ai/**'
       - '.github/workflows/controller-tests.yml'
   workflow_dispatch:
 
@@ -35,3 +36,9 @@ jobs:
       - name: Connection unit tests
         run: npm test
         working-directory: controller/connection
+      - name: AI syntax check
+        run: npm run check
+        working-directory: ai
+      - name: AI proposal tests
+        run: npm test
+        working-directory: ai
