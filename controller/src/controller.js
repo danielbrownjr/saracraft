@@ -69,10 +69,12 @@ export class SaraController {
     task.abort.abort(new Error('STOP'));
     // A transport halt is required even if the adapter ignores AbortSignal.
     try { await this.#adapter.halt(); } catch (err) { return { accepted: true, stopped: false, reason: 'HALT_FAILED', taskId: task.id }; }
+    let timeout;
     const done = await Promise.race([
       task.promise.then(() => true),
-      new Promise(resolve => setTimeout(() => resolve(false), LIMITS.stopWaitMs))
+      new Promise(resolve => { timeout = setTimeout(() => resolve(false), LIMITS.stopWaitMs); })
     ]);
+    clearTimeout(timeout);
     const final = this.#events.filter(e => e.taskId === task.id).at(-1);
     return { accepted: true, stopped: done && TERMINAL.has(final?.state) && final.state !== 'COMPLETED', taskId: task.id };
   }
