@@ -1,21 +1,28 @@
-# Design template only; requires separate approval before launch.
+# M0.1 DESIGN ONLY. Not approved for execution. All required deploy values fail closed.
 services:
   minecraft:
-    image: itzg/minecraft-server:java21
+    image: ${MC_IMAGE_DIGEST:?Set reviewed immutable Java 21 image reference before approved deployment}
     profiles: ["deploy"]
-    restart: unless-stopped
+    restart: "no"
     ports:
-      - "127.0.0.1:25565:25565"
+      - "${MC_BIND_IP:?Set verified private LAN or VPN interface IP}:25565:25565/tcp"
     environment:
       EULA: "${MC_EULA:-FALSE}"
       TYPE: PAPER
       VERSION: "1.21.11"
-      MEMORY: 4G
+      MEMORY: "4G"
       ONLINE_MODE: "TRUE"
-      DIFFICULTY: normal
-      MODE: survival
-      MAX_PLAYERS: 4
+      ENABLE_WHITELIST: "TRUE"
+      ENFORCE_WHITELIST: "TRUE"
+      WHITELIST: "${MC_WHITELIST:?Set approved usernames or UUIDs}"
+      DIFFICULTY: "normal"
+      MODE: "survival"
+      MAX_PLAYERS: "4"
+      VIEW_DISTANCE: "8"
+      SIMULATION_DISTANCE: "5"
       ENABLE_RCON: "FALSE"
       MOTD: "SaraCraft private survival"
+    mem_limit: 6g
+    cpus: 3.0
     volumes:
       - ./runtime/world:/data
