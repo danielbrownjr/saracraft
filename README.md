@@ -2,7 +2,7 @@
 
 A private Minecraft Java AI companion project for cooperative survival.
 
-**Status (2026-11-21): M0.1 design only.** No Minecraft server, bot, controller or paid API has been installed or deployed by this project work.
+**Status (2026-11-21): M0.2 controller prototype and M0.3 host-preparation plan.** The dependency-free controller passes local mock-based unit tests; no Minecraft bot integration, server deployment, host installation or paid API has been performed through this session.
 
 ## Design choices
 
@@ -24,4 +24,4 @@ A private Minecraft Java AI companion project for cooperative survival.
 
 `compose.yaml` is a **nondeployable-by-default design template**. Deployment requires explicit approval, EULA acceptance, verified private bind IP, authenticated allowlist, immutable image digest, and a reviewed build. The illustrative bot profile is not a validated Mindcraft CE schema. No credentials belong in Git.
 
-Next gate: pinned integration dependencies and implementation of the authenticated bot/controller before real runtime testing.
+Next gates: establish pinned Mindcraft/Mineflayer/Paper artifacts and implement a real authenticated Minecraft adapter; run the read-only Heph preflight then perform separately verified authorized host preparation. See [controller prototype](controller/README.md) and [host preparation runbook](docs/heph-host-preparation.md).
