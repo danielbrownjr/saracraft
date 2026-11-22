@@ -2,7 +2,7 @@
 
 A private Minecraft Java AI companion project for cooperative survival.
 
-**Status (2026-11-21): M0.2 controller prototype and M0.3 host-preparation plan.** The dependency-free controller passes local mock-based unit tests; no Minecraft bot integration, server deployment, host installation or paid API has been performed through this session.
+**Status (2026-11-22): M0.8 Mineflayer movement integration under offline verification.** The recovered movement source is selectively reconciled with the reviewed M0.7 safety gate. Mock tests establish software behavior only; deployment and controlled Minecraft acceptance require separate authorization. See [M0.8 integration](docs/m0-8-integration.md) and [source reconciliation](docs/m0-8-reconciliation.md).
 
 ## Design choices
 
@@ -24,4 +24,4 @@ A private Minecraft Java AI companion project for cooperative survival.
 
 `compose.yaml` is a **nondeployable-by-default design template**. Deployment requires explicit approval, EULA acceptance, verified private bind IP, authenticated allowlist, immutable image digest, and a reviewed build. The illustrative bot profile is not a validated Mindcraft CE schema. No credentials belong in Git.
 
-Next gates: establish pinned Mindcraft/Mineflayer/Paper artifacts and implement a real authenticated Minecraft adapter; run the read-only Heph preflight then perform separately verified authorized host preparation. See [controller prototype](controller/README.md) and [host preparation runbook](docs/heph-host-preparation.md).
+Next gate: finish draft M0.8 review and obtain separate authorization for a bounded, attended Minecraft acceptance trial. No deployment or gameplay is authorized by the source changes.

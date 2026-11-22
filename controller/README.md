@@ -1,15 +1,21 @@
-# SaraCraft M0.2 controller prototype
+# SaraCraft controller and M0.8 movement integration
 
-A deliberately **dependency-free, non-networked** JavaScript controller. Requires Node.js 22+ to execute.
+The controller remains dependency-free and accepts deterministic authenticated command envelopes. The separate `connection/` adapter uses pinned Mineflayer/pathfinder dependencies and integrates the reviewed `navigation/` safety monitor.
 
-Run `npm test` and `npm run check` inside `controller/`. Tests use mock adapters and do not connect to Minecraft.
+Commands: `!sara follow`, `!sara come-here` (also `come here` and `come`), `!sara stop` (also `cancel`), `!sara return`, and `!sara gather <oak_log|spruce_log|birch_log> <1..32>`. The movement chat adapter admits only follow, come-here and STOP; gather/return remain unavailable there.
 
-The only supported commands are `!sara follow`, `!sara return`, `!sara gather <oak_log|spruce_log|birch_log> <1..32>`, and `!sara stop`.
+The trusted envelope helper is a boundary, not an authenticator. Name-only chat never establishes authority. Movement admission requires the configured commander UUID, protocol-verified chat, encrypted transport, matching player roster and a strictly increasing packet index.
 
-**Important trust boundary:** An adapter must establish sender UUID through authenticated server identity and set `identityVerified` only after real verification. The plain Mineflayer `chat` event emits a username and is not acceptable as proof of authorization. `normalizeTrustedChat` is a data shape helper and cannot verify identity by itself. Do not connect untrusted raw player text directly to `SaraController.handle`.
+Deadlines abort execution and request a transport halt. STOP bounds halt and task settlement concurrently; duplicate requests share the task cancellation. The first terminal reason wins. An uncooperative task or unsuccessful halt quarantines the controller instance, preventing replacement authorization. `stopped` describes adapter settlement plus halt acknowledgement; `movementStopped: false` explicitly records that physical cessation was not verified.
 
-**STOP semantics:** AbortSignal, transport-specific `halt()`, and a bounded wait for task shutdown. A failed halt or uncooperative adapter returns `stopped: false`; it cannot guarantee physical in-world cessation until integration checks pass.
+Install the locked connection dependencies before recursive discovery:
 
-The adapter methods `follow`, `gather`, `returnHome`, and `halt` are currently injected mocks, **not a working Mineflayer binding**. Only return `{ verified: true }` on observed world/inventory effects. No hosted-model API client, secrets, persistent store or network server is included yet.
+```sh
+cd connection
+npm ci --ignore-scripts --no-audit --no-fund
+cd ..
+npm run check
+npm test
+```
 
-Future integration gates: a pinned Mineflayer version/lockfile, Microsoft login, server-authenticated UUID resolution, genuine pathfinding/collection, idempotent restart handling, persistence and real stop latency measurements.
+Use Node 22.23.5/npm 10.9.9. All tests use mocks or local installed libraries; never execute `connection/main.js` for offline verification. See [integration decisions and acceptance limits](../docs/m0-8-integration.md).

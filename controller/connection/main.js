@@ -3,6 +3,8 @@ import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import mineflayer from 'mineflayer'
 import prismarineAuth from 'prismarine-auth'
+import { enableMovement } from './movement.js'
+import { runtimeOptions } from './runtime-config.js'
 import { classify, identity, target, verifiedProfile, verifyConnection } from './connection.js'
 
 process.umask(0o077)
@@ -41,7 +43,7 @@ function privateDeviceCode({ verification_uri: uri, user_code: code }) {
   }
 }
 
-async function main() {
+async function main({ walk, commanderUuid }) {
   for (const path of ['/auth', cache]) {
     const stat = lstatSync(path)
     if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) {
@@ -56,8 +58,12 @@ async function main() {
     const auth = new Authflow(identity.name, cache, {
       authTitle: Titles.MinecraftNintendoSwitch, deviceType: 'Nintendo', flow: 'live'
     }, privateDeviceCode)
-    credentials = await auth.getMinecraftJavaToken({ fetchProfile: true })
+    credentials = await auth.getMinecraftJavaToken({ fetchProfile: true, fetchCertificates: walk })
     verifiedProfile(credentials)
+    if (walk && !credentials.certificates?.profileKeys) {
+      report('failed', { category: 'chat_certificate_unavailable' })
+      return false
+    }
   } catch (error) {
     report('failed', { category: classify('auth', error) })
     return false
@@ -65,19 +71,24 @@ async function main() {
   if (abort.signal.aborted) return false
   report('identity_verified', identity)
   connecting = true
+  let movementHalt
   return verifyConnection({
     config: target, report, signal: abort.signal,
-    createBot: () => mineflayer.createBot({
+    stay: walk,
+    onClosing: () => movementHalt?.dispose(),
+    createBot: () => {
+      const bot = mineflayer.createBot({
       ...target,
       username: identity.name,
-      physicsEnabled: false,
-      disableChatSigning: true,
+      physicsEnabled: walk,
+      disableChatSigning: !walk,
       hideErrors: true,
       auth(client, options) {
         const profile = verifiedProfile(credentials)
         const session = { accessToken: credentials.token, selectedProfile: profile, availableProfile: [profile] }
         options.haveCredentials = true
         options.accessToken = credentials.token
+        if (walk) Object.assign(client, credentials.certificates)
         client.session = session
         client.username = profile.name
         queueMicrotask(() => {
@@ -89,17 +100,24 @@ async function main() {
           }
         })
       }
-    })
+      })
+      if (walk) {
+        try { movementHalt = enableMovement(bot, commanderUuid, report, { signal: abort.signal }) }
+        catch { queueMicrotask(() => bot.emit('error', new Error('Movement initialization failed'))) }
+      }
+      return bot
+    }
   })
 }
 
 try {
+  const options = runtimeOptions(process.argv.slice(2), process.env)
   const authDeadline = setTimeout(() => {
     report('failed', { category: 'authentication_timeout' })
     process.exit(1)
-  }, 8 * 60_000)
+  }, (options.walk ? 17 : 8) * 60_000)
   authDeadline.unref()
-  process.exitCode = (await main()) ? 0 : 1
+  process.exitCode = (await main(options)) ? 0 : 1
   clearTimeout(authDeadline)
 } catch {
   process.stdout.write('SaraCraft verification failed during setup.\n')

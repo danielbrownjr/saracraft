@@ -1,5 +1,7 @@
 # M0.7 navigation safety gate
 
+M0.8 implements this contract in the adjacent [Mineflayer adapter](../connection/movement.js); see [integration limits](../../docs/m0-8-integration.md). The reviewed monitor and its tests are unchanged. The M0.7 contract below remains applicable.
+
 This is a **source-only, fail-closed safety primitive**, not a deployed Mineflayer navigation system. Tests use mocks, not a live Minecraft connection. It does not prove in-world STOP, escape, or creeper avoidance.
 
 An authenticated Mineflayer movement adapter must:

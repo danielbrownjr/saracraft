@@ -3,10 +3,16 @@
   "version": "0.3.0",
   "private": true,
   "type": "module",
-  "engines": { "node": "22.23.5" },
-  "scripts": { "test": "node --test", "start": "node main.js" },
+  "engines": {
+    "node": "22.23.5"
+  },
+  "scripts": {
+    "test": "node --test",
+    "start": "node main.js"
+  },
   "dependencies": {
     "mineflayer": "4.39.0",
+    "mineflayer-pathfinder": "2.4.5",
     "prismarine-auth": "3.1.1"
   }
 }
