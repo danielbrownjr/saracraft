@@ -27,7 +27,11 @@ physics disabled, no signed-chat certificate request, no movement adapter or
 pathfinder import, and no player-chat movement command listener. Positive
 control-state changes and pathfinder access are prohibited. It samples sanitized
 air metadata, chunk coverage, entity readiness and hazard observations at about
-1 Hz after spawn. No observational result is permission to move. An attended
+1 Hz after spawn. The control guard installs after Mineflayer's plugin injection,
+before any spawn observations. Because physics is off, the physics water flag is
+unavailable by design; block-volume immersion is reported separately and the
+combined navigation verdict remains UNKNOWN_STATE. Do not interpret that
+diagnostic verdict as a movement readiness result. No observational result is permission to move. An attended
 live trial requires its own explicit authorization; offline tests do not prove
 physical stationarity or server behavior.
 

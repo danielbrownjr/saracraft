@@ -8,12 +8,25 @@ export function enableObservation(bot, report, { now = Date.now, intervalMs = 10
       !Number.isFinite(intervalMs) || intervalMs < 1 || intervalMs > 1000) {
     throw new TypeError('Invalid observation configuration')
   }
-  const originalControl = bot.setControlState?.bind(bot)
-  if (typeof originalControl !== 'function') throw new Error('Control guard unavailable')
-  bot.setControlState = (control, value) => {
-    if (value !== false) throw new Error('Observation mode prohibits actuation')
-    return originalControl(control, false)
+  // Mineflayer injects its physics plugin on inject_allowed *after* createBot()
+  // returns. Wrapping the property earlier would either throw or be overwritten.
+  // Our listener is registered after Mineflayer's loader, so it runs afterward.
+  let guardInstalled = false
+  let disposed = false
+  function installControlGuard() {
+    if (disposed) return
+    const originalControl = bot.setControlState?.bind(bot)
+    if (typeof originalControl !== 'function') {
+      bot.emit('error', new Error('Observation control guard unavailable after injection'))
+      return
+    }
+    bot.setControlState = (control, value) => {
+      if (value !== false) throw new Error('Observation mode prohibits actuation')
+      return originalControl(control, false)
+    }
+    guardInstalled = true
   }
+  bot.once('inject_allowed', installControlGuard)
   // This mode loads no pathfinder. Reject even accidental goal access.
   Object.defineProperty(bot, 'pathfinder', {
     configurable: false,
@@ -21,7 +34,6 @@ export function enableObservation(bot, report, { now = Date.now, intervalMs = 10
     set() { throw new Error('Observation mode prohibits pathfinder installation') }
   })
   const telemetry = createTelemetry(bot, { now })
-  let disposed = false
   let timer
 
   function sample() {
@@ -29,13 +41,14 @@ export function enableObservation(bot, report, { now = Date.now, intervalMs = 10
     let details = {
       rawAirReceived: false, airPacketCount: telemetry.airPacketCount,
       airPacketAgeMs: null, chunkColumnsLoaded: 0, entityCount: null,
-      entitiesObserved: false, inWater: null, creeperDistanceBlocks: null,
+      entitiesObserved: false, inWater: null, blockVolumeInWater: null,
+      physicsWaterFlag: 'unavailable_physics_disabled', creeperDistanceBlocks: null,
       verdict: 'UNKNOWN_STATE'
     }
     try {
       const position = bot.entity?.position
       const timestamp = now()
-      if (position && ['x', 'y', 'z'].every(k => Number.isFinite(position[k]))) {
+      if (guardInstalled && position && ['x', 'y', 'z'].every(k => Number.isFinite(position[k]))) {
         let loaded = 0
         for (const x of [-8, 0, 8]) for (const z of [-8, 0, 8]) {
           if (bot.world?.getColumnAt?.(new Vec3(position.x + x, position.y, position.z + z))) loaded++
@@ -52,10 +65,15 @@ export function enableObservation(bot, report, { now = Date.now, intervalMs = 10
           chunkColumnsLoaded: loaded,
           entityCount: state?.entitiesObserved ? Object.keys(bot.entities).length : null,
           entitiesObserved: state?.entitiesObserved === true,
-          inWater: typeof state?.inWater === 'boolean' ? state.inWater : null,
+          // With physics disabled Mineflayer never initializes isInWater.
+          // Report observed block-volume immersion separately without falsely
+          // claiming the combined navigation verdict has passed.
+          inWater: null,
+          blockVolumeInWater: telemetry.observeBlockImmersion(),
+          physicsWaterFlag: 'unavailable_physics_disabled',
           creeperDistanceBlocks: Number.isFinite(state?.creeperDistance)
             ? Math.round(state.creeperDistance) : null,
-          verdict: verdict.safe ? 'SAFE' : verdict.reason
+          verdict: 'UNKNOWN_STATE'
         }
       }
     } catch { details.verdict = 'STATE_UNAVAILABLE' }
@@ -72,6 +90,7 @@ export function enableObservation(bot, report, { now = Date.now, intervalMs = 10
     disposed = true
     clearInterval(timer)
     bot.removeListener('spawn', onSpawn)
+    bot.removeListener('inject_allowed', installControlGuard)
     bot.removeListener('end', dispose)
     telemetry.dispose()
   }

@@ -113,6 +113,17 @@ export function createTelemetry(bot, { now = Date.now, maxAgeMs = 1000 } = {}) {
   }
   return {
     readState,
+    // Diagnostic-only block inspection; does not infer the physics water flag.
+    observeBlockImmersion() {
+      const entity = bot.entity
+      const position = entity?.position
+      const width = entity?.width
+      const height = entity?.height
+      if (ended || !finitePosition(position) ||
+          !Number.isFinite(width) || width <= 0 || width > 2 ||
+          !Number.isFinite(height) || height <= 0 || height > 3) return null
+      return volume(position, width, height, false)
+    },
     get airPacketCount() { return airPacketCount },
     dispose() {
       ended = true

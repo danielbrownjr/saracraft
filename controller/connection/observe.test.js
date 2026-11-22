@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import { enableObservation } from './observe.js'
+import mineflayer from 'mineflayer'
 
 function fixture() {
   const bot = new EventEmitter()
@@ -18,6 +19,7 @@ function fixture() {
   const events = []
   const observer = enableObservation(bot, (event, payload) => events.push({ event, payload }),
     { now: () => 10_000, intervalMs: 1000 })
+  bot.emit('inject_allowed')
   return { bot, observer, events }
 }
 
@@ -47,7 +49,10 @@ test('stationary samples are sanitized and never issue movement controls', () =>
   assert.equal(last.airPacketCount, 1)
   assert.equal(last.chunkColumnsLoaded, 9)
   assert.equal(last.entitiesObserved, true)
-  assert.equal(last.verdict, 'SAFE')
+  assert.equal(last.blockVolumeInWater, false)
+  assert.equal(last.physicsWaterFlag, 'unavailable_physics_disabled')
+  assert.equal(last.inWater, null)
+  assert.equal(last.verdict, 'UNKNOWN_STATE')
   for (const event of events) {
     assert.doesNotMatch(JSON.stringify(event), /position|commander|uuid|username|chat|accessToken/i)
   }
@@ -59,6 +64,17 @@ test('stationary samples are sanitized and never issue movement controls', () =>
   observer.dispose()
 })
 
+test('control guard installs after plugin injection, not before', () => {
+  const bot = new EventEmitter()
+  bot._client = new EventEmitter()
+  const observer = enableObservation(bot, () => {})
+  assert.equal(bot.setControlState, undefined)
+  bot.setControlState = () => {}
+  bot.emit('inject_allowed')
+  assert.throws(() => bot.setControlState('forward', true), /prohibits actuation/)
+  observer.dispose()
+})
+
 test('unknown chunk coverage remains fail-closed', () => {
   const { bot, observer, events } = fixture()
   bot.world.getColumnAt = () => null
@@ -66,4 +82,31 @@ test('unknown chunk coverage remains fail-closed', () => {
   assert.equal(events[0].payload.chunkColumnsLoaded, 0)
   assert.equal(events[0].payload.verdict, 'UNKNOWN_STATE')
   observer.dispose()
+})
+
+// Real Mineflayer 4.39.0 plugin-loader ordering without sockets or authentication.
+test('real createBot defers control injection; observe guards after inject_allowed', async () => {
+  const bot = mineflayer.createBot({
+    username: 'offline_fixture', version: '1.21.11',
+    physicsEnabled: false, disableChatSigning: true,
+    auth() { /* Do not connect, authenticate, or emit session. */ }
+  })
+  const observer = enableObservation(bot, () => {})
+  assert.equal(bot.setControlState, undefined)
+  try {
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('plugin injection did not run')), 1000)
+      bot.once('inject_allowed', () => {
+        clearTimeout(timeout)
+        resolve()
+      })
+    })
+    assert.equal(typeof bot.setControlState, 'function')
+    assert.throws(() => bot.setControlState('forward', true), /prohibits actuation/)
+    assert.throws(() => bot.pathfinder, /prohibits pathfinder access/)
+    assert.equal(bot.listenerCount('playerChat'), 0)
+    assert.equal(bot._client.listenerCount('player_chat'), 0)
+  } finally {
+    observer.dispose()
+  }
 })

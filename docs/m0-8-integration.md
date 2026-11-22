@@ -44,7 +44,13 @@ chat listener is installed. The telemetry observer attaches before spawn and
 emits sanitized `telemetry_sample` records at approximately 1 Hz with raw air
 packet count/age, chunk coverage, entity readiness/count, immersion status,
 rounded creeper proximity and the fail-closed safety verdict. It reports no
-positions, usernames, UUIDs or chat content in diagnostic samples. The player's
+positions, usernames, UUIDs or chat content in diagnostic samples. The control
+guard is installed after Mineflayer's inject_allowed plugin event, not at
+createBot return time. With physics disabled, the block-volume water observation
+is reported separately; the physics water flag is explicitly unavailable and
+the combined navigation verdict is UNKNOWN_STATE by construction. This must not
+be confused with missing raw-air packets or treated as a failed dry-ground
+movement-acceptance test. The player's
 current position is used only as a zero-distance observation target, without
 planning or requesting a movement path.
 
