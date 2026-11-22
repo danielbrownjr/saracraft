@@ -1,5 +1,4 @@
 import { Vec3 } from 'vec3'
-import { assessNavigation } from '../navigation/safety.js'
 import { createTelemetry } from './telemetry.js'
 
 // No pathfinder import, movement adapter, commander, or gameplay command handler.
@@ -53,26 +52,25 @@ export function enableObservation(bot, report, { now = Date.now, intervalMs = 10
         for (const x of [-8, 0, 8]) for (const z of [-8, 0, 8]) {
           if (bot.world?.getColumnAt?.(new Vec3(position.x + x, position.y, position.z + z))) loaded++
         }
-        const state = telemetry.readState(position)
-        let verdict
-        try { verdict = assessNavigation(state, { now: timestamp }) }
-        catch { verdict = { safe: false, reason: 'STATE_UNAVAILABLE' } }
+        // Independent diagnostics must not be hidden by the navigation
+        // readState air-freshness gate. Never use these to authorize movement.
+        const air = telemetry.observeAir()
+        const observedEntities = telemetry.observeEntities()
         details = {
-          rawAirReceived: Number.isInteger(state?.air) && telemetry.airPacketCount > 0,
-          airPacketCount: telemetry.airPacketCount,
-          airPacketAgeMs: Number.isFinite(state?.airObservedAt)
-            ? Math.max(0, Math.round(timestamp - state.airObservedAt)) : null,
+          rawAirReceived: air.received,
+          airPacketCount: air.count,
+          airPacketAgeMs: air.ageMs,
           chunkColumnsLoaded: loaded,
-          entityCount: state?.entitiesObserved ? Object.keys(bot.entities).length : null,
-          entitiesObserved: state?.entitiesObserved === true,
+          entityCount: observedEntities.entityCount,
+          entitiesObserved: observedEntities.entitiesObserved,
           // With physics disabled Mineflayer never initializes isInWater.
           // Report observed block-volume immersion separately without falsely
           // claiming the combined navigation verdict has passed.
           inWater: null,
           blockVolumeInWater: telemetry.observeBlockImmersion(),
           physicsWaterFlag: 'unavailable_physics_disabled',
-          creeperDistanceBlocks: Number.isFinite(state?.creeperDistance)
-            ? Math.round(state.creeperDistance) : null,
+          creeperDistanceBlocks: Number.isFinite(observedEntities.creeperDistance)
+            ? Math.round(observedEntities.creeperDistance) : null,
           verdict: 'UNKNOWN_STATE'
         }
       }

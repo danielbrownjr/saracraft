@@ -113,6 +113,25 @@ export function createTelemetry(bot, { now = Date.now, maxAgeMs = 1000 } = {}) {
   }
   return {
     readState,
+    // Diagnostic-only raw packet evidence. Deliberately independent of the
+    // navigation freshness gate, which remains unchanged.
+    observeAir() {
+      const sampledAt = now()
+      const ageMs = Number.isFinite(airObservedAt) && Number.isFinite(sampledAt) &&
+        sampledAt >= airObservedAt ? Math.round(sampledAt - airObservedAt) : null
+      return { received: !ended && Number.isFinite(airObservedAt),
+        ageMs, count: airPacketCount }
+    },
+    // Diagnostic-only entity observation, independent of air freshness.
+    observeEntities() {
+      const position = bot.entity?.position
+      if (ended || !finitePosition(position)) {
+        return { entitiesObserved: false, creeperDistance: undefined, entityCount: null }
+      }
+      const observation = entities(position)
+      return { ...observation,
+        entityCount: observation.entitiesObserved ? Object.keys(bot.entities).length : null }
+    },
     // Diagnostic-only block inspection; does not infer the physics water flag.
     observeBlockImmersion() {
       const entity = bot.entity

@@ -17,10 +17,11 @@ function fixture() {
   bot.setControlState = (key, value) => { bot.lastControl = [key, value] }
   bot.loadPlugin = () => { throw Error('must not load pathfinder') }
   const events = []
+  let time = 10_000
   const observer = enableObservation(bot, (event, payload) => events.push({ event, payload }),
-    { now: () => 10_000, intervalMs: 1000 })
+    { now: () => time, intervalMs: 1000 })
   bot.emit('inject_allowed')
-  return { bot, observer, events }
+  return { bot, observer, events, advance: ms => { time += ms } }
 }
 
 test('observation forbids goals and positive controls, with no player-chat listener', () => {
@@ -61,6 +62,38 @@ test('stationary samples are sanitized and never issue movement controls', () =>
   observer.sample()
   assert.equal(events.length, 2)
   assert.equal(bot._client.listenerCount('entity_metadata'), 0)
+  observer.dispose()
+})
+
+test('missing air does not hide loaded entities and nearby creeper', () => {
+  const { bot, observer, events } = fixture()
+  bot.entities[2] = { id: 2, name: 'creeper', position: new Vec3(3.5, 64, 0.5) }
+  bot.emit('spawn')
+  const sample = events[0].payload
+  assert.equal(sample.rawAirReceived, false)
+  assert.equal(sample.airPacketCount, 0)
+  assert.equal(sample.airPacketAgeMs, null)
+  assert.equal(sample.entitiesObserved, true)
+  assert.equal(sample.entityCount, 2)
+  assert.equal(sample.creeperDistanceBlocks, 3)
+  assert.equal(sample.verdict, 'UNKNOWN_STATE')
+  observer.dispose()
+})
+
+test('stale air retains packet age and independent entity observations', () => {
+  const { bot, observer, events, advance } = fixture()
+  bot.entities[2] = { id: 2, name: 'creeper', position: new Vec3(3.5, 64, 0.5) }
+  bot._client.emit('entity_metadata', { entityId: 1, metadata: [{ key: 1, value: 300 }] })
+  advance(1500)
+  bot.emit('spawn')
+  const sample = events[0].payload
+  assert.equal(sample.rawAirReceived, true)
+  assert.equal(sample.airPacketCount, 1)
+  assert.equal(sample.airPacketAgeMs, 1500)
+  assert.equal(sample.entitiesObserved, true)
+  assert.equal(sample.entityCount, 2)
+  assert.equal(sample.creeperDistanceBlocks, 3)
+  assert.equal(sample.verdict, 'UNKNOWN_STATE')
   observer.dispose()
 })
 

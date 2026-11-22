@@ -54,7 +54,11 @@ movement-acceptance test. The player's
 current position is used only as a zero-distance observation target, without
 planning or requesting a movement path.
 
-The air freshness rule is unchanged pending actual server evidence. No live
+The air freshness rule is unchanged pending actual server evidence.
+Independent observation-only accessors report raw air packet count/age and
+local entity readiness and creeper distance even when the navigation safety
+snapshot fails closed because air is missing or stale. These diagnostic-only
+fields do not authorize movement or establish complete server entity delivery. No live
 connection or physical stationarity has been verified. An independent focused
 re-review must accept this exact implementation before separate authorization
 for an attended stationary trial.
