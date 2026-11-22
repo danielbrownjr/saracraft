@@ -47,7 +47,7 @@ function fixture() {
   bot.physics = physicsPackage.Physics(bot.registry, { getBlock: p => bot.blockAt(p) })
   bot.loadPlugin = plugin => plugin(bot)
   const reports = []
-  const halt = enableMovement(bot, commander, (event, details) => reports.push({ event, ...details }), { now: () => 10000 })
+  const halt = enableMovement(bot, commander, (event, details) => reports.push({ event, ...details }), { now: () => 10000, searchTimeoutMs: 10_000, searchTickTimeoutMs: 1_000 })
   const airKey = bot.registry.entitiesByName.player.metadataKeys.indexOf('air_supply')
   bot._client.emit('entity_metadata', { entityId: 1, metadata: [{ key: airKey, value: 300 }] })
   return { bot, halt, controls, reports, water: () => { water = true } }

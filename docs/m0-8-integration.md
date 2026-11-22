@@ -34,11 +34,35 @@ The historical signed-chat certificate request and bounded eight-minute movement
 
 The only added dependency is exact `mineflayer-pathfinder@2.4.5`; all prior lock records remain unchanged. Verification uses Node 22.23.5/npm 10.9.9. CI installs the connection lock before recursive test discovery, because movement tests now import the pinned adapter library. Existing supported checkout/setup-node actions remain unchanged. Dependency deprecations and audit concerns are recorded rather than suppressed with unrelated upgrades.
 
+## Observation-only source candidate (not live accepted)
+
+`node main.js --observe` is an independent 180-second diagnostic launch mode.
+It disables physics and chat signing, requests no profile certificates, and
+imports neither pathfinder nor the movement adapter. A control wrapper rejects
+positive movement states; a pathfinder access trap rejects goals. No commander
+chat listener is installed. The telemetry observer attaches before spawn and
+emits sanitized `telemetry_sample` records at approximately 1 Hz with raw air
+packet count/age, chunk coverage, entity readiness/count, immersion status,
+rounded creeper proximity and the fail-closed safety verdict. It reports no
+positions, usernames, UUIDs or chat content in diagnostic samples. The player's
+current position is used only as a zero-distance observation target, without
+planning or requesting a movement path.
+
+The air freshness rule is unchanged pending actual server evidence. No live
+connection or physical stationarity has been verified. An independent focused
+re-review must accept this exact implementation before separate authorization
+for an attended stationary trial.
+
+The real-pathfinder fixture uses a larger, **test-only** A* search budget to
+avoid wall-clock contention; production deadlines and rejection of partial
+paths are unchanged. Whitespace verification previously existed only in local
+engineering evidence, not as a GitHub Actions workflow step.
+
 ## Proposed attended acceptance, requiring separate authorization
 
 1. Review the draft changes and obtain explicit approval for the exact candidate, isolated installation, authentication, Minecraft connection and bounded attended trial. Verify the operator, commander identity, private server configuration and recovery route without reading credential contents. No merge or deployment is implied by this proposal.
-2. Begin with a stationary, dry, enclosed area under direct operator observation. Verify whether real self air packets, entity tracking, loaded chunks and path updates satisfy fail-closed telemetry. If they do not, stop and collect only sanitized diagnostics; do not inject safe defaults or bypass the guard.
-3. If telemetry is adequate, permit one short dry-ground come-here operation, then a short follow, explicit STOP and one replacement. Correlate task events with observed position/velocity and server timestamps. Set a predeclared observation window and cessation tolerance before testing; halt acknowledgement alone does not pass.
+2. Begin with the separately reviewed `--observe` candidate in a stationary, dry, enclosed area under direct operator observation. This mode does not load pathfinder or accept movement commands. Observe raw self-air packets, entity readiness and loaded chunks without attempting any path. If observations are absent or stale, record sanitized diagnostics only; do not inject safe defaults or bypass the guard. End the observation session before any movement-enabled test.
+3. Only during a **separately authorized later movement trial**, if telemetry is adequate, permit one short dry-ground come-here operation, then a short follow, explicit STOP and one replacement. Correlate task events with observed position/velocity and server timestamps. Set a predeclared observation window and cessation tolerance before testing; halt acknowledgement alone does not pass.
 4. Verify unknown telemetry and disconnect cancellation without approaching hazards. Do not intentionally immerse the bot or approach a live creeper while no safe recovery/evasion is accepted. Hazard behavior remains an offline rejection test until a separately reviewed recovery plan and operator intervention are authorized.
 5. End the attended session within its bound, verify disconnect, preserve sanitized evidence and leave the candidate draft/unmerged. Unexpected motion, missing observations, failed halt or unmet telemetry assumptions ends the trial immediately.
 

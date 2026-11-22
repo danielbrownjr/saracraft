@@ -20,6 +20,17 @@ Only sanitized verification events are saved in `/auth/verification.jsonl`. Capt
 
 If authentication resolves to another Minecraft profile, the verifier closes without contacting Paper. An operator can start over with a new private cache directory. Keep the old cache private and remove it through the normal credential disposal process.
 
+## Observation-only diagnostics (requires separate live authorization)
+
+`node main.js --observe` has a 180-second stationary connection window,
+physics disabled, no signed-chat certificate request, no movement adapter or
+pathfinder import, and no player-chat movement command listener. Positive
+control-state changes and pathfinder access are prohibited. It samples sanitized
+air metadata, chunk coverage, entity readiness and hazard observations at about
+1 Hz after spawn. No observational result is permission to move. An attended
+live trial requires its own explicit authorization; offline tests do not prove
+physical stationarity or server behavior.
+
 ## M0.8 movement mode
 
 `node main.js --walk` selects the recovered movement integration. It requires an explicitly supplied `SARACRAFT_COMMANDER_UUID`; there is no commander default. Missing, malformed, recovery-placeholder or bot-self UUIDs fail before authentication directories are accessed. The approved server and bot identity pins above are preserved; the sanitized recovery archive's example identity and endpoint are not imported as runtime configuration.

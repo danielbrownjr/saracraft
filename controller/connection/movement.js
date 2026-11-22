@@ -43,7 +43,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   movements.blocksToAvoid.add(bot.registry.blocksByName.water.id)
   movements.exclusionAreasStep.push(block => isWater(block) ? 101 : 0)
   bot.pathfinder.setMovements(movements)
-  Object.assign(bot.pathfinder, { searchRadius: 32, thinkTimeout: 100, tickTimeout: 10,
+  Object.assign(bot.pathfinder, { searchRadius: 32, thinkTimeout: options.searchTimeoutMs ?? 100, tickTimeout: options.searchTickTimeoutMs ?? 10,
     enablePathShortcut: false })
 
   const originalGoal = bot.pathfinder.setGoal.bind(bot.pathfinder)
@@ -188,7 +188,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
           }
           // Public generator avoids getPathTo's mutation of pathfinder's active A*.
           const next = bot.pathfinder.getPathFromTo(movements, start, goal,
-            { timeout: 100, tickTimeout: 10, searchRadius: 32 }).next().value?.result
+            { timeout: options.searchTimeoutMs ?? 100, tickTimeout: options.searchTickTimeoutMs ?? 10, searchRadius: 32 }).next().value?.result
           if (next?.status !== 'success' || !Array.isArray(next.path) ||
               next.path.some(p => p.toBreak?.length || p.toPlace?.length)) {
             rejectMovement(task, null, 'UNKNOWN_STATE'); return

@@ -11,6 +11,7 @@ export function isWater(block) {
 // entity_metadata packet and ages out independently of subsequent local reads.
 export function createTelemetry(bot, { now = Date.now, maxAgeMs = 1000 } = {}) {
   let air
+  let airPacketCount = 0
   let airObservedAt
   let ended = false
   const onMetadata = packet => {
@@ -21,6 +22,7 @@ export function createTelemetry(bot, { now = Date.now, maxAgeMs = 1000 } = {}) {
     const entry = packet.metadata.find(item => item.key === airKey)
     if (!entry) return
     air = entry.value
+    airPacketCount++
     airObservedAt = now()
   }
   const invalidate = () => { air = undefined; airObservedAt = undefined }
@@ -111,6 +113,7 @@ export function createTelemetry(bot, { now = Date.now, maxAgeMs = 1000 } = {}) {
   }
   return {
     readState,
+    get airPacketCount() { return airPacketCount },
     dispose() {
       ended = true
       bot._client.removeListener('entity_metadata', onMetadata)

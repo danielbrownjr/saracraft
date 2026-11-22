@@ -3,7 +3,7 @@ import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import mineflayer from 'mineflayer'
 import prismarineAuth from 'prismarine-auth'
-import { enableMovement } from './movement.js'
+// Import movement dynamically only in --walk. --observe cannot load pathfinder.
 import { runtimeOptions } from './runtime-config.js'
 import { classify, identity, target, verifiedProfile, verifyConnection } from './connection.js'
 
@@ -43,7 +43,7 @@ function privateDeviceCode({ verification_uri: uri, user_code: code }) {
   }
 }
 
-async function main({ walk, commanderUuid }) {
+async function main({ walk, observe, commanderUuid }) {
   for (const path of ['/auth', cache]) {
     const stat = lstatSync(path)
     if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) {
@@ -69,13 +69,21 @@ async function main({ walk, commanderUuid }) {
     return false
   }
   if (abort.signal.aborted) return false
-  report('identity_verified', identity)
+  report('identity_verified', observe ? {} : identity)
   connecting = true
-  let movementHalt
+  const installMovement = walk ? (await import('./movement.js')).enableMovement : null
+  const installObserver = observe ? (await import('./observe.js')).enableObservation : null
+  let attachment
+  const trialReport = observe ? (event, details = {}) => {
+    if (event === 'spawn') return report('spawn')
+    if (event === 'player_presence') return report('player_presence', { self: details.self === true })
+    if (event === 'movement_ready') return report('observation_ready')
+    return report(event, details)
+  } : report
   return verifyConnection({
-    config: target, report, signal: abort.signal,
-    stay: walk,
-    onClosing: () => movementHalt?.dispose(),
+    config: target, report: trialReport, signal: abort.signal,
+    stay: walk || observe, sessionMs: observe ? 180_000 : 480_000,
+    onClosing: () => attachment?.dispose(),
     createBot: () => {
       const bot = mineflayer.createBot({
       ...target,
@@ -101,9 +109,14 @@ async function main({ walk, commanderUuid }) {
         })
       }
       })
-      if (walk) {
-        try { movementHalt = enableMovement(bot, commanderUuid, report, { signal: abort.signal }) }
-        catch { queueMicrotask(() => bot.emit('error', new Error('Movement initialization failed'))) }
+      if (walk || observe) {
+        try {
+          attachment = walk
+            ? installMovement(bot, commanderUuid, trialReport, { signal: abort.signal })
+            : installObserver(bot, trialReport)
+        } catch {
+          queueMicrotask(() => bot.emit('error', new Error('Session initialization failed')))
+        }
       }
       return bot
     }
@@ -115,7 +128,7 @@ try {
   const authDeadline = setTimeout(() => {
     report('failed', { category: 'authentication_timeout' })
     process.exit(1)
-  }, (options.walk ? 17 : 8) * 60_000)
+  }, (options.walk ? 17 : options.observe ? 9 : 8) * 60_000)
   authDeadline.unref()
   process.exitCode = (await main(options)) ? 0 : 1
   clearTimeout(authDeadline)
