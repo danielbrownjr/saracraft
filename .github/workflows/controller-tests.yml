@@ -35,3 +35,9 @@ jobs:
       - name: Connection unit tests
         run: npm test
         working-directory: controller/connection
+      - name: Navigation safety syntax check
+        run: node --check safety.js
+        working-directory: controller/navigation
+      - name: Navigation safety unit tests
+        run: node --test safety.test.js
+        working-directory: controller/navigation
