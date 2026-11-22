@@ -1,15 +1,17 @@
 # M0.7 navigation safety gate
 
-This is a **source-only, fail-closed safety primitive**, not a deployed Mineflayer navigation system. It is not evidence that SaraCraft can swim, pathfind, escape creepers, or halt in-world.
+This is a **source-only, fail-closed safety primitive**, not a deployed Mineflayer navigation system. Tests use mocks, not a live Minecraft connection. It does not prove in-world STOP, escape, or creeper avoidance.
 
-A future authenticated Mineflayer movement adapter must:
-- Call `check({ signal })` before issuing a movement goal and at bounded intervals while it moves.
-- Provide **fresh** game-derived telemetry: `air` (0–300), `inWater`, `nextStepInWater` (actual next route step, not only the current block), and `creeperDistance` (nearest hostile creeper in blocks; use a finite range sentinel such as 1e6 if none are observed).
-- Fail closed if telemetry, chunk observations or route safety cannot be established. Never invent safe readings to pass the gate.
-- Implement `halt` by cancelling the active pathfinder goal and relevant Mineflayer movement controls. A resolved halt call is **not** proof that the in-game entity actually stopped.
-- Stop the movement task and report `reason` and `haltConfirmed` when the gate trips. A failed halt needs escalation, not a quiet retry.
-- Tie STOP's AbortSignal to the monitor, independently from timeout and disconnect handling.
+An authenticated Mineflayer movement adapter must:
+- Call `check({ signal })` before each movement goal and at a bounded cadence while moving. Keep STOP abort independent from disconnect and deadlines.
+- Supply a fresh, complete snapshot: `observedAt` (millisecond timestamp; no future dates; default age <= 1000 ms), `air` (raw 0–300 ticks, not the rounded 0–20 `bot.oxygenLevel`), `inWater`, `nextStepInWater` (the real planned step), `entitiesObserved: true` only after reliable entity enumeration, and `creeperDistance` (3D Euclidean distance between bot and creeper entity positions, in blocks, or `null` when enumeration completed and no creeper was found).
+- Treat missing chunks, stale telemetry, incomplete entity enumeration and unavailable planned-route checks as unknown. Never substitute a large fake distance sentinel (such as 1e6) or invent safe values. The 6-block creeper threshold must be checked against sampling cadence, possible closing speed and margin during integration.
+- Provide a bounded `readState({ signal })` implementation where possible. The monitor independently races read completion against abort and `readTimeoutMs` (default 400 ms), rejecting late results.
+- Provide a `halt` that clears movement goals and control states. All concurrent unsafe checks share a single halt attempt. Its result is `haltState: 'pending' | 'acknowledged' | 'failed' | 'timed_out'` (default halt deadline 1000 ms). **Acknowledged means the halt promise resolved, not that in-world movement stopped.** Failed or timed-out halts require escalation and separate observation of actual cessation.
+- Distinguish `WATER_UNSAFE` (pre-entry, reject route) from `WATER_EXIT_REQUIRED` with `action: 'surface'` (already submerged). **Plain halt is not a safe underwater recovery**; the future adapter must provide a minimal air/dry-block escape before claiming that scenario is safe. This module does not implement or validate an escape; the monitor's halt command only suspends regular navigation. Likewise, halting near a creeper is not a proven evasive maneuver.
 
-The initial policy conservatively blocks water and nearby creepers. It does not implement swimming, rescue, full hostile-mob safety, staleness detection, automatic route replanning, or task persistence. Tests are deterministic mocked snapshots only. Actual game-world acceptance is a separate, authorized milestone.
+The monitor is a one-task latch: first unsafe reason wins and subsequent checks receive the same terminal result. After a trip it must not be reused for another movement task. Default telemetry ages and deadlines are configurable and must be validated against the future adapter's actual cadence and latency.
 
-Run `node --test safety.test.js` with Node 22+ to exercise the gate without connecting to Minecraft.
+This stage excludes Mineflayer integration, automatic route replanning, swimming, live hostile-mob avoidance, verified STOP latency, and autonomous gameplay. Real-world game acceptance requires separate authorization.
+
+Run `node --test safety.test.js` using Node 22+ to exercise the deterministic tests.
