@@ -72,7 +72,13 @@ export class NavigationSafetyMonitor {
       const result = await Promise.race([sample, timeout, aborted]);
       if (signal?.aborted || result.kind === 'abort') return { safe: false, reason: 'CANCELLED' };
       if (result.kind !== 'value') return { safe: false, reason: 'STATE_UNAVAILABLE' };
-      return assessNavigation(result.value, { now: this.#now(), maxAgeMs: this.#maxAgeMs });
+      // Snapshot accessors and the injected clock can throw during disconnects.
+      // Treat evaluation failure like a failed read so check() trips and halts.
+      try {
+        return assessNavigation(result.value, { now: this.#now(), maxAgeMs: this.#maxAgeMs });
+      } catch {
+        return { safe: false, reason: 'STATE_UNAVAILABLE' };
+      }
     } finally {
       clearTimeout(timer);
       if (signal && onAbort) signal.removeEventListener('abort', onAbort);

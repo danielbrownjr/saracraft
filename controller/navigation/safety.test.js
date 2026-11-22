@@ -52,6 +52,35 @@ test('failed read and failed halt are reported', async () => {
   const m = monitor({ readState: () => { throw Error('sensitive'); }, halt: () => { throw Error('down'); } });
   assert.deepEqual(await m.check(), { safe: false, reason: 'STATE_UNAVAILABLE', haltState: 'failed' });
 });
+test('R1: a throwing snapshot getter trips and halts instead of rejecting', async () => {
+  let halts = 0;
+  const state = { ...dry() };
+  Object.defineProperty(state, 'air', { get() { throw Error('entity disconnected'); } });
+  const m = monitor({ readState: () => state, halt: () => { halts++; } });
+  assert.deepEqual(await m.check(), {
+    safe: false, reason: 'STATE_UNAVAILABLE', haltState: 'acknowledged'
+  });
+  assert.equal(m.tripped?.reason, 'STATE_UNAVAILABLE');
+  assert.equal(halts, 1);
+});
+
+test('R1: clock failure trips, halts, and remains latched', async () => {
+  let halts = 0; let reads = 0;
+  const m = new NavigationSafetyMonitor({
+    now: () => { throw Error('clock unavailable'); },
+    readState: () => { reads++; return dry(); },
+    halt: () => { halts++; }
+  });
+  assert.deepEqual(await m.check(), {
+    safe: false, reason: 'STATE_UNAVAILABLE', haltState: 'acknowledged'
+  });
+  assert.deepEqual(await m.check(), {
+    safe: false, reason: 'STATE_UNAVAILABLE', haltState: 'acknowledged'
+  });
+  assert.equal(reads, 1);
+  assert.equal(halts, 1);
+});
+
 test('pre-aborted signal skips reads and halts once', async () => {
   const controller = new AbortController(); controller.abort();
   let reads = 0; let halts = 0;
