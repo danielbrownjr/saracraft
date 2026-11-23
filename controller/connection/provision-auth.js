@@ -7,6 +7,14 @@ import { verifyPrivateCache, provisionAuthentication, acquireProvisionLock, rele
 
 process.umask(0o077)
 const safeError = process.stderr.write.bind(process.stderr)
+const FATAL_MESSAGE = 'SaraCraft authentication-only provisioning failed.\n'
+// Node's fatal error path bypasses process.stderr.write and console.*.
+// Use a bounded generic handler; never emit upstream exception contents.
+function fatalExit() {
+  try { safeError(FATAL_MESSAGE) } finally { process.exit(1) }
+}
+process.on('uncaughtException', fatalExit)
+process.on('unhandledRejection', fatalExit)
 // Suppress any direct writes from upstream in addition to console methods.
 // The only intended attended output is the reviewed /dev/tty prompt.
 process.stdout.write = () => true
@@ -24,6 +32,11 @@ async function main() {
   if (process.argv.length !== 2 || !isatty(0) || !isatty(1)) {
     throw new Error('Attended private terminal required')
   }
+  if (process.getuid() === 0) throw new Error('Root authentication is prohibited')
+  // These are supplemental guards; the future trusted launcher must clear the
+  // environment *before* Node starts, as a preload runs before this check.
+  if (process.execArgv.length !== 0 || process.env.NODE_OPTIONS || process.env.NODE_DEBUG ||
+      process.env.DEBUG) throw new Error('Untrusted Node execution environment')
   verifyPrivateCache()
   acquireProvisionLock()
   try {
@@ -52,6 +65,6 @@ try {
   await main()
 } catch {
   // Never stringify upstream errors, auth replies, names or token details.
-  safeError('SaraCraft authentication-only provisioning failed.\n')
+  safeError(FATAL_MESSAGE)
   process.exitCode = 1
 }

@@ -3,6 +3,7 @@
 import { lstatSync, readdirSync, openSync, closeSync, unlinkSync, constants } from 'node:fs'
 import { identity, verifiedProfile } from './connection.js'
 import { privateDeviceCode } from './device-authorization.js'
+import { createStagedCache, persistVerifiedCache } from './staged-auth-cache.js'
 
 export const AUTH_ROOT = '/auth'
 export const AUTH_CACHE = '/auth/cache'
@@ -56,12 +57,14 @@ export async function provisionAuthentication({
   cache = AUTH_CACHE,
   report = () => {},
   deviceCode = privateDeviceCode,
-  profileCheck = verifiedProfile
+  profileCheck = verifiedProfile,
+  persist = persistVerifiedCache
 }) {
   if (cache !== AUTH_CACHE || typeof Authflow !== 'function' || !Titles?.MinecraftNintendoSwitch) {
     throw new Error('Invalid authentication-only configuration')
   }
-  const auth = new Authflow(identity.name, cache, {
+  const staged = createStagedCache(identity.name)
+  const auth = new Authflow(identity.name, staged.factory, {
     authTitle: Titles.MinecraftNintendoSwitch,
     deviceType: 'Nintendo',
     flow: 'live'
@@ -79,6 +82,10 @@ export async function provisionAuthentication({
     fetchProfile: true, fetchCertificates: false
   })
   profileCheck(credentials) // identity + UUID pin; throw on mismatch.
+  // Tokens remain in memory until the approved profile matches. A wrong
+  // Microsoft account or interrupted authentication never reaches this.
+  const files = staged.seal()
+  persist(files, { directory: AUTH_CACHE })
   report('identity_verified')
   // Do not return credentials, profile, token, or device-code response.
   return true

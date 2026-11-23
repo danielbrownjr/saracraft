@@ -28,8 +28,27 @@ initially empty cache. An exclusive root-path-pinned `/auth/.provision.lock` pre
 reviewed separately before installation or execution**. It uses a Microsoft
 device-code prompt written only to `/dev/tty`, suppresses library console
 output and never reports tokens or challenge codes to stdout, stderr or journal.
-The real auth library may write token cache files within the private directory;
-it is intentionally never run during source tests. The process has an 8-minute
+The pinned `prismarine-auth@3.1.1` library uses a **memory-backed custom cache**
+throughout Microsoft/Xbox/Minecraft authentication. Only after the Java profile
+matches the fixed SaraCraft69 name and UUID does the provisioner persist the
+library-compatible JSON cache entries to the private directory with exclusive
+creation, mode 0600 and per-file fsync. A wrong-account, interrupted or
+unsuccessful sign-in **does not persist any authentication tokens**. A failed
+multi-file commit attempts rollback of files it created and reports only a
+generic failure. If cleanup or a hard interruption leaves partial files,
+the nonempty-cache gate and stale lock fail closed; investigate under a
+separately approved private recovery procedure, never via Codex chat.
+Node's uncaught-exception and unhandled-rejection handlers also emit only a
+generic failure, never upstream error text.
+
+When signing in later, use a dedicated browser profile or sign out of your
+personal Microsoft account first; explicitly confirm the account belongs to
+SaraCraft69. The future host launcher **must** use an absolute root-controlled
+Node binary, clean `env -i`-style environment, no `npm run`, and a truly private
+human-operated TTY outside Codex, tmux logging or shared terminal transcripts.
+The source guard rejects root execution and suspicious Node runtime options,
+but it cannot undo a preload that ran before JavaScript initialization.
+The auth library is intentionally never run against real services in source tests. The process has an 8-minute
 backstop. Interrupted or wrong-account attempts can leave partial or mismatched
 private cache state: do not retry automatically or expose its contents.
 Privileged cleanup/reset requires separate review and authorization.

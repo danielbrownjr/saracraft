@@ -1,10 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { identity } from './connection.js'
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, readdirSync, mkdirSync, chmodSync, statSync, rmSync, openSync, closeSync, constants } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { AUTH_CACHE, AUTH_LOCK, verifyPrivateCache, provisionAuthentication, acquireProvisionLock, releaseProvisionLock } from './auth-provisioner.js'
+import { createStagedCache, persistVerifiedCache } from './staged-auth-cache.js'
 
 const good = {
   token: 'SYNTHETIC-NEVER-REAL',
@@ -69,18 +72,21 @@ test('provisioner matches pinned profile, asks for no certificates and returns n
   class FakeAuthflow {
     constructor(name, cache, options, callback) {
       assert.equal(name, identity.name)
-      assert.equal(cache, '/auth/cache')
+      assert.equal(typeof cache, 'function')
       assert.equal(options.flow, 'live')
       assert.equal(options.deviceType, 'Nintendo')
       assert.equal(options.authTitle, 'synthetic-title')
       this.callback = callback
+      this.live = cache({ cacheName: 'live', username: name })
     }
     async getMinecraftJavaToken(opts) {
       requested = opts
+      await this.live.setCachedPartial({ token: { refresh_token: 'SYNTHETIC-REFRESH' } })
       this.callback({ verification_uri: 'https://www.microsoft.com', user_code: 'FAKE-0001' })
       return good
     }
   }
+  let stagedFiles
   const result = await provisionAuthentication({
     Authflow: FakeAuthflow,
     Titles: { MinecraftNintendoSwitch: 'synthetic-title' },
@@ -89,26 +95,42 @@ test('provisioner matches pinned profile, asks for no certificates and returns n
       assert.equal(context.name, identity.name)
       context.report('authorization_required', { secret: 'must not leak' })
     },
-    report: event => events.push(event)
+    report: event => events.push(event),
+    persist(files, { directory }) {
+      assert.equal(directory, '/auth/cache')
+      stagedFiles = files
+    }
   })
   assert.equal(result, true)
   assert.deepEqual(requested, { fetchProfile: true, fetchCertificates: false })
+  assert.equal(stagedFiles.length, 1)
+  assert.match(stagedFiles[0].filename, /^[a-f0-9]{6}_live-cache\.json$/)
+  assert.match(stagedFiles[0].content, /SYNTHETIC-REFRESH/)
   assert.deepEqual(events, ['authorization_required', 'identity_verified'])
   assert.doesNotMatch(JSON.stringify(events), /FAKE|secret|SYNTHETIC/)
 })
 
 test('provisioner refuses the wrong Microsoft/Minecraft account without returning credentials', async () => {
   class WrongProfile {
+    constructor(name, factory) {
+      this.live = factory({ cacheName: 'live', username: name })
+      this.minecraft = factory({ cacheName: 'mca', username: name })
+    }
     async getMinecraftJavaToken() {
+      await this.live.setCachedPartial({ token: { refresh_token: 'WRONG-MICROSOFT-TOKEN' } })
+      await this.minecraft.setCachedPartial({ mca: { access_token: 'WRONG-MINECRAFT-TOKEN' } })
       return { token: 'SYNTHETIC-NEVER-REAL', profile: { name: 'wrong', id: identity.uuid } }
     }
   }
   const events = []
+  let committed = false
   await assert.rejects(provisionAuthentication({
     Authflow: WrongProfile,
     Titles: { MinecraftNintendoSwitch: 'synthetic-title' },
-    report: event => events.push(event)
+    report: event => events.push(event),
+    persist() { committed = true }
   }), /Authentication profile mismatch/)
+  assert.equal(committed, false)
   assert.deepEqual(events, [])
 })
 
@@ -136,6 +158,94 @@ test('provisioner rejects auth backend errors and emits no sensitive diagnostics
     report: event => events.push(event)
   }), /SECRET fake auth failure/)
   assert.deepEqual(events, [])
+})
+
+test('staged cache stays in memory through mid-flow errors and profile mismatch', async () => {
+  const staged = createStagedCache(identity.name)
+  const live = staged.factory({ cacheName: 'live', username: identity.name })
+  // Explicitly exercise unawaited writes in prismarine-auth's LiveTokenManager.
+  void live.setCachedPartial({ token: { refresh_token: 'PRIVATE-MEMORY-ONLY' } })
+  assert.deepEqual(await live.getCached(), { token: { refresh_token: 'PRIVATE-MEMORY-ONLY' } })
+  assert.throws(() => staged.factory({ cacheName: 'live', username: identity.name }), /Unexpected/)
+  assert.throws(() => staged.factory({ cacheName: 'mca', username: 'wrong-account' }), /Unexpected/)
+  const files = staged.seal()
+  assert.equal(files.length, 1)
+  assert.match(files[0].content, /PRIVATE-MEMORY-ONLY/)
+  assert.throws(() => staged.seal(), /finalized/)
+  assert.throws(() => live.setCachedPartial({ x: 'late' }), /finalized/)
+})
+
+test('verified cache commit uses exclusive private files and is read-back compatible with FileCache', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'saracraft-offline-'))
+  try {
+    const staged = createStagedCache(identity.name)
+    const live = staged.factory({ cacheName: 'live', username: identity.name })
+    await live.setCachedPartial({ token: { access_token: 'SYNTHETIC-ACCESS', refresh_token: 'SYNTHETIC-REFRESH' } })
+    const items = staged.seal()
+    assert.equal(persistVerifiedCache(items, { directory: root }), 1)
+    assert.deepEqual(readdirSync(root), [items[0].filename])
+    const path = join(root, items[0].filename)
+    assert.equal(statSync(path).mode & 0o777, 0o600)
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).token, {
+      access_token: 'SYNTHETIC-ACCESS', refresh_token: 'SYNTHETIC-REFRESH'
+    })
+    assert.throws(() => persistVerifiedCache(items, { directory: root }), /commit failed/)
+    assert.equal(readFileSync(path, 'utf8'), items[0].content)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('failed multi-file commit removes only newly created files', () => {
+  const root = mkdtempSync(join(tmpdir(), 'saracraft-offline-'))
+  try {
+    const staged = createStagedCache(identity.name)
+    staged.factory({ cacheName: 'live', username: identity.name }).setCached({ token: { refresh_token: 'TEST-ONLY' } })
+    staged.factory({ cacheName: 'mca', username: identity.name }).setCached({ mca: { access_token: 'TEST-ONLY' } })
+    const files = staged.seal()
+    let opened = 0
+    assert.throws(() => persistVerifiedCache(files, {
+      directory: root,
+      open(path, flags, mode) {
+        if (++opened === 2) throw new Error('synthetic disk failure')
+        return openSync(path, flags, mode)
+      }
+    }), /commit failed/)
+    assert.deepEqual(readdirSync(root), [])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('failed authentication never reaches persistence', async () => {
+  class PartialAuth {
+    constructor(name, factory) { this.live = factory({ cacheName: 'live', username: name }) }
+    async getMinecraftJavaToken() {
+      this.live.setCachedPartial({ token: { refresh_token: 'SHOULD-NOT-SAVE' } })
+      throw new Error('synthetic network abort')
+    }
+  }
+  let commits = 0
+  await assert.rejects(provisionAuthentication({
+    Authflow: PartialAuth,
+    Titles: { MinecraftNintendoSwitch: 'synthetic-title' },
+    persist() { commits++ }
+  }), /synthetic network abort/)
+  assert.equal(commits, 0)
+})
+
+test('fatal Node rejection and exception never print upstream secrets', () => {
+  const cli = fileURLToPath(new URL('./provision-auth.js', import.meta.url))
+  for (const kind of ['exception', 'rejection']) {
+    const code = `await import(${JSON.stringify(cli)}); if (${JSON.stringify(kind)} === 'exception') setImmediate(() => { throw Error('SYNTHETIC-TOKEN-SECRET') }); else Promise.reject(Error('SYNTHETIC-TOKEN-SECRET'));`
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
+      encoding: 'utf8', timeout: 4000, env: { PATH: process.env.PATH }
+    })
+    assert.equal(result.status, 1)
+    assert.equal(result.stdout, '')
+    assert.doesNotMatch(result.stderr, /SYNTHETIC-TOKEN-SECRET|at .*provision-auth|Error:/)
+    assert.match(result.stderr, /SaraCraft authentication-only provisioning failed/)
+  }
 })
 
 test('real prismarine-auth only invokes authentication endpoints with synthetic offline cache', { timeout: 15_000 }, async () => {
