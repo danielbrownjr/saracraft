@@ -23,14 +23,16 @@ export function createStagedCache(expectedUsername) {
     return {
       getCached() { return Promise.resolve(record.value) },
       setCached(value) {
-        if (sealed || !value || typeof value !== 'object' || Array.isArray(value)) {
+        if (sealed) throw new Error('Authentication cache already finalized')
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
           throw new Error('Invalid authentication cache update')
         }
         record.value = { ...value }
         return Promise.resolve()
       },
       setCachedPartial(value) {
-        if (sealed || !value || typeof value !== 'object' || Array.isArray(value)) {
+        if (sealed) throw new Error('Authentication cache already finalized')
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
           throw new Error('Invalid authentication cache update')
         }
         record.value = { ...record.value, ...value }

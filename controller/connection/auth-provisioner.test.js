@@ -123,14 +123,23 @@ test('provisioner refuses the wrong Microsoft/Minecraft account without returnin
     }
   }
   const events = []
+  const root = mkdtempSync(join(tmpdir(), 'saracraft-wrong-account-'))
   let committed = false
-  await assert.rejects(provisionAuthentication({
-    Authflow: WrongProfile,
-    Titles: { MinecraftNintendoSwitch: 'synthetic-title' },
-    report: event => events.push(event),
-    persist() { committed = true }
-  }), /Authentication profile mismatch/)
-  assert.equal(committed, false)
+  try {
+    await assert.rejects(provisionAuthentication({
+      Authflow: WrongProfile,
+      Titles: { MinecraftNintendoSwitch: 'synthetic-title' },
+      report: event => events.push(event),
+      persist(files) {
+        committed = true
+        persistVerifiedCache(files, { directory: root })
+      }
+    }), /Authentication profile mismatch/)
+    assert.equal(committed, false)
+    assert.deepEqual(readdirSync(root), [], 'wrong-account tokens must never reach disk')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
   assert.deepEqual(events, [])
 })
 
@@ -253,15 +262,8 @@ test('real prismarine-auth only invokes authentication endpoints with synthetic 
   const oldFetch = globalThis.fetch
   const attempted = []
   const events = []
-  const cache = () => ({
-    async getCached() { return {} },
-    async setCachedPartial() { throw new Error('unexpected cache write') }
-  })
-  // Wrap real Authflow to replace its cache with a nonpersistent in-memory
-  // fixture. The underlying library's device-code flow is unchanged.
-  class TestAuthflow extends library.Authflow {
-    constructor(name, ignored, options, callback) { super(name, cache, options, callback) }
-  }
+  // Use the real library with production's memory-backed callback.
+  // Any disk-backed regression must trip the test's persistence canary.
   globalThis.fetch = async (url, options) => {
     attempted.push(String(url))
     assert.equal(String(url), 'https://login.live.com/oauth20_connect.srf')
@@ -276,9 +278,10 @@ test('real prismarine-auth only invokes authentication endpoints with synthetic 
   }
   try {
     await assert.rejects(provisionAuthentication({
-      Authflow: TestAuthflow, Titles: library.Titles,
+      Authflow: library.Authflow, Titles: library.Titles,
       deviceCode: (_, context) => { context.report('authorization_required'); throw new Error('AUTH_REQUIRED') },
-      report: event => events.push(event)
+      report: event => events.push(event),
+      persist() { throw new Error('Unexpected disk commit during failed authentication') }
     }), /^Error: AUTH_REQUIRED$/)
     assert.ok(attempted.length >= 1 && attempted.length <= 4)
     assert.equal(events.length, attempted.length)
