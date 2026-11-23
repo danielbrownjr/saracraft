@@ -43,6 +43,34 @@ Stop on any leaked canary, active orphan, unexplained mount, unexpected service 
 
 **Host-access limitation:** GitHub CI and offline fixtures do not execute systemd on Hephaestus. Unless the operator has independently verified host access and specifically authorized the bounded unit tests, classify host acceptance as **BLOCKED / NOT TESTED**. Never substitute a local container or CI job for this acceptance.
 
+## Authentication completion semantics (2026-11-23 synthetic SIGINT finding)
+
+Hephaestus systemd 259.9 returned `systemd-run --wait --collect` status 0
+even when Ctrl-C terminated the synthetic service with SIGINT (2) after
+1.717 seconds. Therefore `systemd-run` success alone proves only the
+client request/wait path, **not** successful authentication.
+
+The reviewed `provision-auth.js` now creates a zero-byte,
+`/auth/.provision-complete` receipt with `O_EXCL | O_NOFOLLOW`,
+mode 0600, and file/parent fsync **only after** verified cache commit,
+private success notification and exclusive lock release. The launcher
+preflight rejects an existing receipt. After `systemd-run` returns zero,
+the launcher requires the receipt to be a single-link regular file owned
+by the bot, size zero and mode 0600; nonempty cache entries must have
+the expected fixed filename patterns, bot owner, mode 0600 and single
+links; no provision lock may remain; and the authentication unit must
+report inactive with PID 0. All inspections are metadata-only; never
+print or read credential bytes. Any failure leaves the inhibit active
+and reports generic failure.
+
+**Limit:** The receipt attests the bot reached the completion point, not
+the service's exact exit signal. A process killed after the receipt was
+committed could still leave valid receipt/cache metadata. Systemd
+exit status alone cannot resolve that race with `--collect`; acceptance
+must exercise this behavior using synthetic data and retain the
+private recovery gate. This change does not prove Microsoft credentials
+are valid and does not authorize real sign-in.
+
 ## Stage 3: readying attended authentication, not triggering it
 
 After all credential-free host acceptance items pass, separately confirm the pinned account `SaraCraft69`, human-controlled non-recorded TTY, sudo policy without `log_input`, `log_output`, or `iolog` capture, PAM audit policy, private bot-owned empty cache, absent lock, inactive observer/auth units, and intact persistent inhibit.
