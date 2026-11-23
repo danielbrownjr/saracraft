@@ -140,10 +140,22 @@ def emergency_stop():
         stop_now()
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         stop_error = error
-    if inhibit_error is not None or stop_error is not None:
-        print("PARTIAL: emergency stop could not verify both termination request and persistent inhibit", file=sys.stderr)
+    # A successful systemctl --no-block call confirms only job acceptance,
+    # not completed process termination or server-side disconnect.
+    stop_requested = stop_error is None
+    inhibit_present = inhibit_error is None
+    if not (stop_requested and inhibit_present):
+        print(
+            "ESTOP PARTIAL: stop_request=" + ("ACCEPTED" if stop_requested else "FAILED")
+            + " inhibit_file=" + ("PRESENT" if inhibit_present else "NOT_CONFIRMED"),
+            file=sys.stderr,
+        )
+        if not stop_requested:
+            print("ACTION: Verify and terminate the bot through separately authorized host administration.", file=sys.stderr)
+        if not inhibit_present:
+            print("WARNING: Future starts are NOT inhibited; do not restart until the inhibit is repaired and verified.", file=sys.stderr)
         return 1
-    print("Accepted: estop (stop requested and inhibit persisted)")
+    print("ESTOP ACCEPTED: stop_request=ACCEPTED inhibit_file=PRESENT (termination not yet verified)")
     return 0
 
 def control(operation):

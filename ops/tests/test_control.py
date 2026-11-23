@@ -141,6 +141,60 @@ class BackendTests(unittest.TestCase):
         run.assert_called_once()
         self.assertIn("PARTIAL", output.getvalue())
 
+    def test_estop_partial_inhibit_failure_reports_future_restart_risk(self):
+        with mock.patch.object(priv, "validate_control_directory"), \
+             mock.patch.object(priv.os, "open", side_effect=OSError("no space")), \
+             mock.patch.object(priv, "run", return_value=result()) as run, \
+             redirect_stderr(io.StringIO()) as output:
+            self.assertEqual(priv.emergency_stop(), 1)
+        run.assert_called_once_with(["/usr/bin/systemctl", "stop", "--no-block", "saracraft-bot.service"])
+        text = output.getvalue()
+        self.assertIn("stop_request=ACCEPTED", text)
+        self.assertIn("inhibit_file=NOT_CONFIRMED", text)
+        self.assertIn("Future starts are NOT inhibited", text)
+        self.assertNotIn("stop_request=FAILED", text)
+
+    def test_estop_partial_stop_failure_reports_termination_not_confirmed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inhibit = Path(directory) / "inhibit"
+            with mock.patch.object(priv, "INHIBIT", inhibit), \
+                 mock.patch.object(priv, "validate_control_directory"), \
+                 mock.patch.object(priv, "run", return_value=result(code=1)) as run, \
+                 redirect_stderr(io.StringIO()) as output:
+                self.assertEqual(priv.emergency_stop(), 1)
+                self.assertTrue(inhibit.exists())
+        run.assert_called_once_with(["/usr/bin/systemctl", "stop", "--no-block", "saracraft-bot.service"])
+        text = output.getvalue()
+        self.assertIn("stop_request=FAILED", text)
+        self.assertIn("inhibit_file=PRESENT", text)
+        self.assertIn("Verify and terminate the bot", text)
+        self.assertNotIn("Future starts are NOT inhibited", text)
+
+    def test_estop_partial_both_failures_reports_both_distinct_outcomes(self):
+        with mock.patch.object(priv, "validate_control_directory", side_effect=RuntimeError("unsafe")), \
+             mock.patch.object(priv, "run", side_effect=FileNotFoundError("systemctl")) as run, \
+             redirect_stderr(io.StringIO()) as output:
+            self.assertEqual(priv.emergency_stop(), 1)
+        run.assert_called_once()
+        text = output.getvalue()
+        self.assertIn("stop_request=FAILED", text)
+        self.assertIn("inhibit_file=NOT_CONFIRMED", text)
+        self.assertIn("Future starts are NOT inhibited", text)
+        self.assertIn("Verify and terminate the bot", text)
+
+    def test_estop_complete_reports_acknowledgment_not_termination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inhibit = Path(directory) / "inhibit"
+            with mock.patch.object(priv, "INHIBIT", inhibit), \
+                 mock.patch.object(priv, "validate_control_directory"), \
+                 mock.patch.object(priv, "run", return_value=result()) as run, \
+                 redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(priv.emergency_stop(), 0)
+                self.assertTrue(inhibit.exists())
+        run.assert_called_once()
+        self.assertIn("stop_request=ACCEPTED inhibit_file=PRESENT", output.getvalue())
+        self.assertIn("termination not yet verified", output.getvalue())
+
     def test_deeply_nested_log_json_is_discarded_not_fatal(self):
         source = "[" * 4096 + "\n" + json.dumps({
             "time": "2026-11-23T12:00:00.000Z",
