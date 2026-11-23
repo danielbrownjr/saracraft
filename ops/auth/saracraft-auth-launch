@@ -23,7 +23,7 @@ RELEASE_BASE = Path("/opt/saracraft/releases")
 BOT_AUTH = Path("/var/lib/saracraft-bot/auth")
 BOT_CACHE = BOT_AUTH / "cache"
 BOT_RECEIPT = BOT_AUTH / ".provision-complete"
-CACHE_NAME = re.compile(r"[a-f0-9]{6}_(?:msal|live|sisu|xbl|bed|mca|mcs|pfb)-cache\.json")
+EXPECTED_CACHE_NAMES = {f"c0e6c0_{kind}-cache.json" for kind in ("live", "xbl", "mca")}
 NODE = Path("/opt/saracraft/runtimes/node-v22.23.5-linux-x64/bin/node")
 SYSTEMCTL = "/usr/bin/systemctl"
 SYSTEMD_RUN = "/usr/bin/systemd-run"
@@ -146,7 +146,10 @@ def verify_completion():
     release. The receipt is mandatory but does not protect against a trusted
     administrator or an attacker with bot-user write privileges.
     """
-    bot = pwd.getpwnam(BOT_USER)
+    try:
+        bot = pwd.getpwnam(BOT_USER)
+    except KeyError as exc:
+        raise RuntimeError("Authentication account unavailable") from exc
     check_private_dir(BOT_AUTH, bot.pw_uid)
     check_private_dir(BOT_CACHE, bot.pw_uid)
     if os.path.lexists(BOT_AUTH / ".provision.lock"):
@@ -157,19 +160,19 @@ def verify_completion():
             stat.S_IMODE(receipt.st_mode) != 0o600 or
             receipt.st_nlink != 1 or receipt.st_size != 0):
         raise RuntimeError("Authentication completion receipt is unsafe")
-    found = False
+    seen = set()
     with os.scandir(BOT_CACHE) as items:
         for item in items:
             info = item.stat(follow_symlinks=False)
-            if (not CACHE_NAME.fullmatch(item.name) or
+            if (item.name not in EXPECTED_CACHE_NAMES or
                     not stat.S_ISREG(info.st_mode) or
                     info.st_uid != bot.pw_uid or info.st_gid != bot.pw_gid or
                     stat.S_IMODE(info.st_mode) != 0o600 or
-                    info.st_nlink != 1):
+                    info.st_nlink != 1 or info.st_size == 0):
                 raise RuntimeError("Authentication completion cache is unsafe")
-            found = True
-    if not found:
-        raise RuntimeError("Authentication completion has no verified cache")
+            seen.add(item.name)
+    if seen != EXPECTED_CACHE_NAMES:
+        raise RuntimeError("Authentication completion cache is incomplete")
     auth = unit_status(AUTH_UNIT)
     if (auth["ActiveState"] != "inactive" or auth["MainPID"] != "0"):
         raise RuntimeError("Authentication service did not terminate cleanly")
