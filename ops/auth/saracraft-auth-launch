@@ -22,6 +22,8 @@ RELEASE_CURRENT = Path("/opt/saracraft/releases/current")
 RELEASE_BASE = Path("/opt/saracraft/releases")
 BOT_AUTH = Path("/var/lib/saracraft-bot/auth")
 BOT_CACHE = BOT_AUTH / "cache"
+BOT_RECEIPT = BOT_AUTH / ".provision-complete"
+CACHE_NAME = re.compile(r"[a-f0-9]{6}_(?:msal|live|sisu|xbl|bed|mca|mcs|pfb)-cache\\.json")
 NODE = Path("/opt/saracraft/runtimes/node-v22.23.5-linux-x64/bin/node")
 SYSTEMCTL = "/usr/bin/systemctl"
 SYSTEMD_RUN = "/usr/bin/systemd-run"
@@ -124,7 +126,7 @@ def preflight():
         raise RuntimeError("Authentication account unavailable") from exc
     check_private_dir(BOT_AUTH, bot.pw_uid)
     check_private_dir(BOT_CACHE, bot.pw_uid)
-    if any(BOT_CACHE.iterdir()) or os.path.lexists(BOT_AUTH / ".provision.lock"):
+    if any(BOT_CACHE.iterdir()) or os.path.lexists(BOT_AUTH / ".provision.lock") or os.path.lexists(BOT_RECEIPT):
         raise RuntimeError("Authentication state needs private recovery")
     observe = unit_status(OBSERVE_UNIT)
     if observe["ActiveState"] != "inactive" or observe["MainPID"] != "0":
@@ -133,6 +135,45 @@ def preflight():
     if auth["LoadState"] not in {"not-found", "loaded"} or             auth["ActiveState"] != "inactive" or auth["MainPID"] != "0":
         raise RuntimeError("Authentication session already active")
     return fixed_release()
+
+
+def verify_completion():
+    """Attest completed, private cache commit without reading credential bytes.
+
+    systemd-run --wait can exit zero after SIGINT kills the service; its exit
+    status alone is NOT an authentication result. The approved bot entrypoint
+    creates a zero-byte receipt only after successful provisioning and lock
+    release. The receipt is mandatory but does not protect against a trusted
+    administrator or an attacker with bot-user write privileges.
+    """
+    bot = pwd.getpwnam(BOT_USER)
+    check_private_dir(BOT_AUTH, bot.pw_uid)
+    check_private_dir(BOT_CACHE, bot.pw_uid)
+    if os.path.lexists(BOT_AUTH / ".provision.lock"):
+        raise RuntimeError("Authentication completion lock remains")
+    receipt = BOT_RECEIPT.lstat()
+    if (not stat.S_ISREG(receipt.st_mode) or
+            receipt.st_uid != bot.pw_uid or receipt.st_gid != bot.pw_gid or
+            stat.S_IMODE(receipt.st_mode) != 0o600 or
+            receipt.st_nlink != 1 or receipt.st_size != 0):
+        raise RuntimeError("Authentication completion receipt is unsafe")
+    found = False
+    with os.scandir(BOT_CACHE) as items:
+        for item in items:
+            info = item.stat(follow_symlinks=False)
+            if (not CACHE_NAME.fullmatch(item.name) or
+                    not stat.S_ISREG(info.st_mode) or
+                    info.st_uid != bot.pw_uid or info.st_gid != bot.pw_gid or
+                    stat.S_IMODE(info.st_mode) != 0o600 or
+                    info.st_nlink != 1):
+                raise RuntimeError("Authentication completion cache is unsafe")
+            found = True
+    if not found:
+        raise RuntimeError("Authentication completion has no verified cache")
+    auth = unit_status(AUTH_UNIT)
+    if (auth["ActiveState"] != "inactive" or auth["MainPID"] != "0"):
+        raise RuntimeError("Authentication service did not terminate cleanly")
+    return True
 
 
 def command(entry):
@@ -188,6 +229,7 @@ def main(argv):
         # No contents of PTY output or upstream exception reach this launcher.
         if result.returncode:
             raise RuntimeError("Attended authentication did not complete")
+        verify_completion()
         return 0
     except KeyboardInterrupt:
         print("SaraCraft authentication interrupted; keep inhibit active.", file=sys.stderr)
