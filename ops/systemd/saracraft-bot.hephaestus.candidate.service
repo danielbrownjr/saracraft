@@ -1,0 +1,42 @@
+# CANDIDATE REFERENCE ONLY. NOT INSTALLED, NOT ACCEPTED FOR LIVE USE.
+# Resolve logging policy and manifest/release promotion checks before installation.
+[Unit]
+Description=SaraCraft Hephaestus observation candidate, reviewed release only
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/saracraft-control/inhibit
+ConditionPathExists=/opt/saracraft/releases/current/APPROVED-RELEASE
+
+[Service]
+Type=exec
+User=saracraft-bot
+Group=saracraft-bot
+WorkingDirectory=/opt/saracraft/releases/current/controller/connection
+ExecStart=/opt/saracraft/runtimes/node-v22.23.5-linux-x64/bin/node /opt/saracraft/releases/current/controller/connection/main.js --observe
+Environment=SARACRAFT_EVIDENCE_PATH=/var/log/saracraft-bot/verification.jsonl
+Restart=no
+RuntimeMaxSec=180
+TimeoutStopSec=5
+KillMode=control-group
+SendSIGKILL=yes
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+LimitCORE=0
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+BindPaths=/var/lib/saracraft-bot/auth:/auth
+ReadWritePaths=/var/lib/saracraft-bot/auth /var/log/saracraft-bot
+InaccessiblePaths=/srv/saracraft /etc/saracraft /run/docker.sock
+# WARNING: journald/syslog visibility is unresolved. Do not install as-is.
+# Do not add an [Install] target or enable at boot.

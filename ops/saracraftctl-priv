@@ -56,6 +56,33 @@ def unit_state():
         raise RuntimeError("Unable to determine restricted bot service state")
     return state
 
+STATUS_FIELDS = ("ActiveState", "Result", "ConditionResult", "ExecMainStatus")
+STATUS_VALUES = {
+    "ActiveState": re.compile(r"^(inactive|active|activating|deactivating|failed|reloading)$"),
+    "Result": re.compile(r"^(success|exit-code|signal|core-dump|timeout|watchdog|start-limit-hit|resources|protocol|oom-kill|condition|assert|dependency|clean|skip|)$"),
+    "ConditionResult": re.compile(r"^(yes|no|)$"),
+    "ExecMainStatus": re.compile(r"^[0-9]{0,5}$"),
+}
+
+def unit_details():
+    # Fixed properties only; do not pass through arbitrary systemctl output.
+    command = [SYSTEMCTL, "show", UNIT, "--property=" + ",".join(STATUS_FIELDS), "--no-pager"]
+    result = run(command)
+    if result.returncode:
+        raise RuntimeError("Unable to determine restricted bot unit result")
+    entries = {}
+    for line in result.stdout.splitlines():
+        if "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        if name in STATUS_VALUES and STATUS_VALUES[name].fullmatch(value):
+            if name in entries:
+                raise RuntimeError("Duplicate unit status property")
+            entries[name] = value
+    if set(entries) != set(STATUS_FIELDS):
+        raise RuntimeError("Missing or invalid unit status properties")
+    return {name: entries[name] for name in STATUS_FIELDS}
+
 def sanitize(entry):
     """Never forward raw journal text, unrecognized events or extra keys."""
     if not isinstance(entry, dict) or set(entry) - ({"time", "run", "event"} | set(SAFE_EVENT.get(entry.get("event"), ()))):
@@ -168,7 +195,12 @@ def control(operation):
     # Read-only operations never wait on the start/clear lock.
     if operation == "status":
         validate_control_directory()
-        print(json.dumps({"state": unit_state(), "emergency_inhibit": INHIBIT.exists()}, sort_keys=True))
+        details = unit_details()
+        print(json.dumps({"state": details["ActiveState"],
+                          "result": details["Result"],
+                          "condition_result": details["ConditionResult"],
+                          "exec_main_status": int(details["ExecMainStatus"]) if details["ExecMainStatus"] else None,
+                          "emergency_inhibit": INHIBIT.exists()}, sort_keys=True))
         return 0
     if operation == "logs":
         public_logs()

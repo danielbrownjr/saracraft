@@ -125,7 +125,7 @@ class BackendTests(unittest.TestCase):
 
     def test_status_and_logs_skip_exclusive_lock(self):
         with mock.patch.object(priv, "validate_control_directory"), \
-             mock.patch.object(priv, "unit_state", return_value="inactive"), \
+             mock.patch.object(priv, "unit_details", return_value={"ActiveState": "inactive", "Result": "success", "ConditionResult": "yes", "ExecMainStatus": "0"}), \
              mock.patch.object(priv, "public_logs"), \
              mock.patch.object(priv, "INHIBIT", mock.Mock(exists=lambda: False)), \
              mock.patch.object(priv.fcntl, "flock", side_effect=AssertionError("lock acquired")), \
@@ -205,6 +205,51 @@ class BackendTests(unittest.TestCase):
             priv.public_logs()
         self.assertEqual(len(output.getvalue().splitlines()), 1)
         self.assertIn("disconnected", output.getvalue())
+
+    def test_status_reports_bounded_unit_outcomes(self):
+        response = result("\n".join([
+            "ActiveState=failed", "Result=exit-code",
+            "ConditionResult=yes", "ExecMainStatus=226",
+        ]) + "\n")
+        with mock.patch.object(priv, "run", return_value=response) as cmd:
+            details = priv.unit_details()
+        self.assertEqual(details["Result"], "exit-code")
+        self.assertEqual(details["ExecMainStatus"], "226")
+        cmd.assert_called_once_with([
+            "/usr/bin/systemctl", "show", "saracraft-bot.service",
+            "--property=ActiveState,Result,ConditionResult,ExecMainStatus",
+            "--no-pager",
+        ])
+
+    def test_status_drops_unsafe_unit_metadata(self):
+        values = [
+            "ActiveState=active\nResult=success\nConditionResult=yes\nExecMainStatus=0\nDescription=untrusted",
+            "ActiveState=active\nResult=success\nConditionResult=yes\nExecMainStatus=bad",
+            "ActiveState=active\nResult=success\nConditionResult=yes",
+            "ActiveState=active\nActiveState=failed\nResult=success\nConditionResult=yes\nExecMainStatus=0",
+            "ActiveState=active\nResult=success\nConditionResult=yes\nExecMainStatus=0\nExecMainStatus=1",
+        ]
+        for value in values[1:]:
+            with self.subTest(value=value), mock.patch.object(priv, "run", return_value=result(value)):
+                with self.assertRaises(RuntimeError):
+                    priv.unit_details()
+        # Unknown fields do not leak into the returned allowlist.
+        with mock.patch.object(priv, "run", return_value=result(values[0])):
+            self.assertEqual(set(priv.unit_details()), set(priv.STATUS_FIELDS))
+
+    def test_status_prints_only_allowlisted_diagnostics(self):
+        details = {"ActiveState": "failed", "Result": "exit-code",
+                   "ConditionResult": "yes", "ExecMainStatus": "226"}
+        with mock.patch.object(priv, "validate_control_directory"), \
+             mock.patch.object(priv, "unit_details", return_value=details), \
+             mock.patch.object(priv, "INHIBIT", mock.Mock(exists=lambda: False)), \
+             redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(priv.control("status"), 0)
+        visible = json.loads(output.getvalue())
+        self.assertEqual(visible["exec_main_status"], 226)
+        self.assertEqual(visible["result"], "exit-code")
+        self.assertEqual(visible["condition_result"], "yes")
+        self.assertNotIn("Description", visible)
 
     def test_operations_single_unit_and_persistent_estop(self):
         with tempfile.TemporaryDirectory() as temporary:
