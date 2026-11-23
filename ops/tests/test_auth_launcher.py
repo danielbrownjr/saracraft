@@ -166,9 +166,11 @@ class LauncherTests(unittest.TestCase):
     def test_main_dispatches_only_fixed_command_and_generic_failure(self):
         entry = Path("/opt/saracraft/releases/" + "a" * 40 + "/controller/connection/provision-auth.js")
         with mock.patch.object(mod, "preflight", return_value=entry), \
+             mock.patch.object(mod, "verify_completion", return_value=True) as completed, \
              mock.patch.object(mod.subprocess, "run",
                 return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
             self.assertEqual(mod.main([]), 0)
+            completed.assert_called_once_with()
             self.assertEqual(run.call_args.args[0], mod.command(entry))
             self.assertEqual(run.call_args.kwargs["env"],
                              {"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
@@ -179,6 +181,75 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(mod.main([]), 1)
             self.assertNotIn("SYNTHETIC-SECRET", stderr.getvalue())
             self.assertIn("keep inhibit active", stderr.getvalue())
+
+
+    def test_zero_systemd_run_result_without_receipt_fails_closed(self):
+        entry = Path("/opt/saracraft/releases/" + "a" * 40 + "/controller/connection/provision-auth.js")
+        with mock.patch.object(mod, "preflight", return_value=entry), \
+             mock.patch.object(mod.subprocess, "run",
+                return_value=subprocess.CompletedProcess([], 0, "", "")), \
+             mock.patch.object(mod, "verify_completion", side_effect=RuntimeError("receipt missing")), \
+             redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(mod.main([]), 1)
+            self.assertIn("keep inhibit active", stderr.getvalue())
+            self.assertNotIn("receipt missing", stderr.getvalue())
+
+    def test_nonzero_or_interrupted_systemd_run_never_accepts_receipt(self):
+        entry = Path("/opt/saracraft/releases/" + "a" * 40 + "/controller/connection/provision-auth.js")
+        for response, expected in [
+            (subprocess.CompletedProcess([], 1, "", ""), 1),
+            (subprocess.TimeoutExpired([], 560), 1),
+            (KeyboardInterrupt(), 130),
+        ]:
+            with self.subTest(response=repr(response)), \
+                 mock.patch.object(mod, "preflight", return_value=entry), \
+                 mock.patch.object(mod, "verify_completion") as receipt, \
+                 redirect_stderr(io.StringIO()):
+                if isinstance(response, BaseException):
+                    effect = {"side_effect": response}
+                else:
+                    effect = {"return_value": response}
+                with mock.patch.object(mod.subprocess, "run", **effect):
+                    self.assertEqual(mod.main([]), expected)
+                receipt.assert_not_called()
+
+    def test_completion_requires_receipt_cache_and_inactive_unit(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "auth"
+            root.mkdir(mode=0o700)
+            cache = root / "cache"
+            cache.mkdir(mode=0o700)
+            receipt = root / ".provision-complete"
+            uid, gid = os.getuid(), os.getgid()
+            bot = mock.Mock(pw_uid=uid, pw_gid=gid)
+            offline = {"LoadState": "not-found", "ActiveState": "inactive", "MainPID": "0"}
+            with mock.patch.object(mod, "BOT_AUTH", root), \
+                 mock.patch.object(mod, "BOT_CACHE", cache), \
+                 mock.patch.object(mod, "BOT_RECEIPT", receipt), \
+                 mock.patch.object(mod.pwd, "getpwnam", return_value=bot), \
+                 mock.patch.object(mod, "unit_status", return_value=offline):
+                # Simulated SIGINT after systemd-run reported zero.
+                with self.assertRaises(OSError):
+                    mod.verify_completion()
+                receipt.touch(mode=0o600)
+                with self.assertRaisesRegex(RuntimeError, "no verified cache"):
+                    mod.verify_completion()
+                file = cache / ("a" * 6 + "_msal-cache.json")
+                file.write_text("synthetic, not a credential")
+                file.chmod(0o600)
+                self.assertTrue(mod.verify_completion())
+                with mock.patch.object(mod, "unit_status",
+                        return_value={"LoadState": "loaded", "ActiveState": "active", "MainPID": "123"}):
+                    with self.assertRaisesRegex(RuntimeError, "terminate cleanly"):
+                        mod.verify_completion()
+                file.chmod(0o666)
+                with self.assertRaisesRegex(RuntimeError, "cache is unsafe"):
+                    mod.verify_completion()
+                file.chmod(0o600)
+                lock = root / ".provision.lock"
+                lock.touch()
+                with self.assertRaisesRegex(RuntimeError, "lock remains"):
+                    mod.verify_completion()
 
 
 if __name__ == "__main__":
