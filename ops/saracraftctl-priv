@@ -124,35 +124,36 @@ def sanitize(entry):
     return result
 
 def read_private_log_lines():
-    # The bot owns its private 0700 log directory and 0600 regular append-only
-    # evidence file. This helper runs as root; only filtered events escape.
-    # Never fall back to journald or an attacker-supplied pathname.
+    # Root-only fixed-path reader. Never fall back to journald or caller paths.
     bot_uid = pwd.getpwnam(BOT_USER).pw_uid
-    directory = PRIVATE_LOG_DIR.lstat()
-    if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != bot_uid or (directory.st_mode & 0o077) != 0:
-        raise RuntimeError("Private log directory ownership or permissions are unsafe")
-    descriptor = os.open(PRIVATE_LOG, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    directory_fd = os.open(PRIVATE_LOG_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        info = os.fstat(descriptor)
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != bot_uid or
-                info.st_nlink != 1 or (info.st_mode & 0o077) != 0):
-            raise RuntimeError("Private log file ownership or permissions are unsafe")
-        length = min(info.st_size, MAX_LOG_BYTES)
-        # Read a bounded tail; discard the first partial line.
-        start = max(0, info.st_size - length)
-        os.lseek(descriptor, start, os.SEEK_SET)
-        data = bytearray()
-        while len(data) < length:
-            chunk = os.read(descriptor, min(8192, length - len(data)))
-            if not chunk:
-                break
-            data.extend(chunk)
-        if start:
-            first_newline = data.find(b"\\n")
-            data = data[first_newline + 1:] if first_newline >= 0 else bytearray()
-        return bytes(data).decode("utf-8", errors="replace").splitlines()
+        directory = os.fstat(directory_fd)
+        if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != bot_uid or (directory.st_mode & 0o077) != 0:
+            raise RuntimeError('Private log directory ownership or permissions are unsafe')
+        descriptor = os.open(PRIVATE_LOG.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=directory_fd)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != bot_uid or info.st_nlink != 1 or (info.st_mode & 0o077) != 0:
+                raise RuntimeError('Private log file ownership or permissions are unsafe')
+            length = min(info.st_size, MAX_LOG_BYTES)
+            start = max(0, info.st_size - length)
+            os.lseek(descriptor, start, os.SEEK_SET)
+            data = bytearray()
+            while len(data) < length:
+                chunk = os.read(descriptor, min(8192, length - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+            if start:
+                # Discard the initial fragment, retaining complete trailing lines.
+                first_newline = data.find(b"\n")
+                data = data[first_newline + 1:] if first_newline >= 0 else bytearray()
+            return bytes(data).decode("utf-8", errors="replace").splitlines()
+        finally:
+            os.close(descriptor)
     finally:
-        os.close(descriptor)
+        os.close(directory_fd)
 
 def public_logs():
     entries = []
