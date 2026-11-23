@@ -213,7 +213,7 @@ class LauncherTests(unittest.TestCase):
                     self.assertEqual(mod.main([]), expected)
                 receipt.assert_not_called()
 
-    def test_completion_requires_receipt_cache_and_inactive_unit(self):
+    def test_completion_requires_exact_three_files_and_inactive_unit(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "auth"
             root.mkdir(mode=0o700)
@@ -228,28 +228,72 @@ class LauncherTests(unittest.TestCase):
                  mock.patch.object(mod, "BOT_RECEIPT", receipt), \
                  mock.patch.object(mod.pwd, "getpwnam", return_value=bot), \
                  mock.patch.object(mod, "unit_status", return_value=offline):
-                # Simulated SIGINT after systemd-run reported zero.
                 with self.assertRaises(OSError):
                     mod.verify_completion()
                 receipt.touch(mode=0o600)
-                with self.assertRaisesRegex(RuntimeError, "no verified cache"):
+                with self.assertRaisesRegex(RuntimeError, "incomplete"):
                     mod.verify_completion()
-                file = cache / ("a" * 6 + "_msal-cache.json")
-                file.write_text("synthetic, not a credential")
-                file.chmod(0o600)
+                filenames = sorted(mod.EXPECTED_CACHE_NAMES)
+                for filename in filenames[:2]:
+                    file = cache / filename
+                    file.write_text("synthetic, not a credential")
+                    file.chmod(0o600)
+                with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                    mod.verify_completion()
+                last = cache / filenames[2]
+                last.write_text("synthetic")
+                last.chmod(0o600)
                 self.assertTrue(mod.verify_completion())
                 with mock.patch.object(mod, "unit_status",
                         return_value={"LoadState": "loaded", "ActiveState": "active", "MainPID": "123"}):
                     with self.assertRaisesRegex(RuntimeError, "terminate cleanly"):
                         mod.verify_completion()
-                file.chmod(0o666)
+                last.chmod(0o666)
                 with self.assertRaisesRegex(RuntimeError, "cache is unsafe"):
                     mod.verify_completion()
-                file.chmod(0o600)
+                last.chmod(0o600)
+                last.write_text("")
+                with self.assertRaisesRegex(RuntimeError, "cache is unsafe"):
+                    mod.verify_completion()
+                last.write_text("synthetic")
+                foreign = cache / "aaaaaa_live-cache.json"
+                foreign.write_text("synthetic")
+                foreign.chmod(0o600)
+                with self.assertRaisesRegex(RuntimeError, "cache is unsafe"):
+                    mod.verify_completion()
+                foreign.unlink()
                 lock = root / ".provision.lock"
                 lock.touch()
                 with self.assertRaisesRegex(RuntimeError, "lock remains"):
                     mod.verify_completion()
+                lock.unlink()
+                receipt.chmod(0o644)
+                with self.assertRaisesRegex(RuntimeError, "receipt is unsafe"):
+                    mod.verify_completion()
+                receipt.chmod(0o600)
+                linked = root / "linked-receipt"
+                os.link(receipt, linked)
+                with self.assertRaisesRegex(RuntimeError, "receipt is unsafe"):
+                    mod.verify_completion()
+                linked.unlink()
+                receipt.unlink()
+                receipt.symlink_to(last)
+                with self.assertRaisesRegex(RuntimeError, "receipt is unsafe"):
+                    mod.verify_completion()
+
+    def test_completion_missing_bot_account_is_generic_failure(self):
+        with mock.patch.object(mod.pwd, "getpwnam", side_effect=KeyError("synthetic-user")):
+            with self.assertRaisesRegex(RuntimeError, "account unavailable"):
+                mod.verify_completion()
+        entry = Path("/opt/saracraft/releases/" + "a" * 40 + "/controller/connection/provision-auth.js")
+        with mock.patch.object(mod, "preflight", return_value=entry), \
+             mock.patch.object(mod.subprocess, "run",
+                return_value=subprocess.CompletedProcess([], 0, "", "")), \
+             mock.patch.object(mod, "verify_completion",
+                side_effect=RuntimeError("Authentication account unavailable")), \
+             redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(mod.main([]), 1)
+            self.assertNotIn("account unavailable", stderr.getvalue())
 
 
 if __name__ == "__main__":
