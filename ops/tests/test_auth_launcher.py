@@ -149,16 +149,16 @@ class LauncherTests(unittest.TestCase):
                 mod.audit_trusted_tree(root)
 
     def test_missing_bot_identity_and_interrupt_fail_closed(self):
-        with mock.patch.object(mod.os, "geteuid", return_value=0), \\
-             mock.patch.dict(mod.os.environ, {"SUDO_USER": "daniel"}), \\
-             mock.patch.object(mod.os, "isatty", return_value=True), \\
-             mock.patch("builtins.open", mock.mock_open()) as tty, \\
-             mock.patch.object(mod, "check_root_path"), \\
+        with mock.patch.object(mod.os, "geteuid", return_value=0), \
+             mock.patch.dict(mod.os.environ, {"SUDO_USER": "daniel"}), \
+             mock.patch.object(mod.os, "isatty", return_value=True), \
+             mock.patch("builtins.open", mock.mock_open()) as tty, \
+             mock.patch.object(mod, "check_root_path"), \
              mock.patch.object(mod.pwd, "getpwnam", side_effect=KeyError("missing")):
             tty.return_value.__enter__.return_value.fileno.return_value = 4
             with self.assertRaisesRegex(RuntimeError, "account unavailable"):
                 mod.preflight()
-        with mock.patch.object(mod, "preflight", side_effect=KeyboardInterrupt), \\
+        with mock.patch.object(mod, "preflight", side_effect=KeyboardInterrupt), \
              redirect_stderr(io.StringIO()) as stderr:
             self.assertEqual(mod.main([]), 130)
             self.assertIn("keep inhibit active", stderr.getvalue())
