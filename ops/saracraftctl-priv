@@ -5,6 +5,8 @@ This file must be owned by root and not writable by the developer or bot.
 The service and its root-controlled release must be installed separately.
 """
 import fcntl
+import pwd
+import stat
 import json
 import os
 from pathlib import Path
@@ -14,7 +16,10 @@ import sys
 
 UNIT = "saracraft-bot.service"
 SYSTEMCTL = "/usr/bin/systemctl"
-JOURNALCTL = "/usr/bin/journalctl"
+PRIVATE_LOG = Path("/var/log/saracraft-bot/verification.jsonl")
+PRIVATE_LOG_DIR = PRIVATE_LOG.parent
+BOT_USER = "saracraft-bot"
+MAX_LOG_BYTES = 256 * 1024
 CONTROL_DIR = Path("/var/lib/saracraft-control")
 LOCK = CONTROL_DIR / "operations.lock"
 INHIBIT = CONTROL_DIR / "inhibit"
@@ -118,17 +123,48 @@ def sanitize(entry):
         result[name] = value
     return result
 
+def read_private_log_lines():
+    # The bot owns its private 0700 log directory and 0600 regular append-only
+    # evidence file. This helper runs as root; only filtered events escape.
+    # Never fall back to journald or an attacker-supplied pathname.
+    bot_uid = pwd.getpwnam(BOT_USER).pw_uid
+    directory = PRIVATE_LOG_DIR.lstat()
+    if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != bot_uid or (directory.st_mode & 0o077) != 0:
+        raise RuntimeError("Private log directory ownership or permissions are unsafe")
+    descriptor = os.open(PRIVATE_LOG, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != bot_uid or
+                info.st_nlink != 1 or (info.st_mode & 0o077) != 0):
+            raise RuntimeError("Private log file ownership or permissions are unsafe")
+        length = min(info.st_size, MAX_LOG_BYTES)
+        # Read a bounded tail; discard the first partial line.
+        start = max(0, info.st_size - length)
+        os.lseek(descriptor, start, os.SEEK_SET)
+        data = bytearray()
+        while len(data) < length:
+            chunk = os.read(descriptor, min(8192, length - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        if start:
+            first_newline = data.find(b"\\n")
+            data = data[first_newline + 1:] if first_newline >= 0 else bytearray()
+        return bytes(data).decode("utf-8", errors="replace").splitlines()
+    finally:
+        os.close(descriptor)
+
 def public_logs():
-    result = run([JOURNALCTL, "--no-pager", "--output=cat", "-u", UNIT, "-n", "150"])
-    if result.returncode: raise RuntimeError("Sanitized logs unavailable")
     entries = []
-    for line in result.stdout.splitlines():
-        if len(line) > 4096: continue
+    for line in read_private_log_lines():
+        if len(line) > 4096:
+            continue
         try:
             safe = sanitize(json.loads(line))
         except (ValueError, TypeError, RecursionError):
             continue
-        if safe is not None: entries.append(safe)
+        if safe is not None:
+            entries.append(safe)
     for entry in entries[-100:]:
         print(json.dumps(entry, separators=(",", ":"), sort_keys=True))
 

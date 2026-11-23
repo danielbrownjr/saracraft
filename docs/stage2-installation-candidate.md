@@ -4,9 +4,9 @@
 **Host evidence:** Hephaestus preflight of November 23, 2026, including authorized ownership-only metadata checks.
 **Status:** source candidate only. No accounts, files, services, permissions, processes, tokens or Minecraft connections have been changed by this task.
 
-## Trust model decision required
+## Approved source-level trust and logging decisions (2026-11-23)
 
-Recommended: `daniel` remains the human host administrator for recovery and owns routine development. `saracraft-bot` is the future unprivileged runtime. The approved bot release is root-controlled and immutable to routine development. `saracraftctl` is the single fixed-verb control route for routine operation, with no general sudo lease.
+Dan approved retaining `daniel` as the human host administrator for recovery and owns routine development. `saracraft-bot` is the future unprivileged runtime. The approved bot release is root-controlled and immutable to routine development. `saracraftctl` is the single fixed-verb control route for routine operation, with no general sudo lease.
 
 **Important limit:** `daniel` currently belongs to `sudo`, `adm`, and `lxd`. This is **operational separation**, not a hardened claim that the host administrator cannot access a protected bot. Do not revoke these groups without a separate recovery and trust-model authorization.
 
@@ -23,21 +23,21 @@ Recommended: `daniel` remains the human host administrator for recovery and owns
 
 ## Candidate artifacts
 
-- `ops/systemd/saracraft-bot.hephaestus.candidate.service` is a **noninstallable review reference** using the future absolute Node 22.23.5 path. Its systemd controls, bind mounts, path availability, and logs are **untested on Hephaestus**.
+- `ops/systemd/saracraft-bot.hephaestus.candidate.service` is a **noninstallable review reference** using the future absolute Node 22.23.5 path. Its systemd controls, bind mounts and actual effective sandbox are **untested on Hephaestus**. Its stdout/stderr are discarded using `StandardOutput=null` and `StandardError=null`, so the bot cannot put raw output into `adm`-readable journald or syslog via these streams. Service-manager metadata may still be journaled.
 - `ops/release_manifest.py` can construct and verify a deterministic SHA-256 inventory of regular files in an offline assembled release; symlinks and special files fail closed. The manifest must be created, signed off and stored separately by a trusted administrator, never by the developer during release promotion. The manifest is not a cryptographic signature and does not attest to Node or systemd units outside the release root.
 - `APPROVED-RELEASE` is a *presence-only administrative gate*. It does not validate the SHA it contains. The future promotion procedure must compare a separately trusted manifest and record the exact release Git SHA, Node binary SHA, dependency lock and installer hashes before placing the gate file.
 - `ops/saracraftctl-priv` now provides allowlisted systemd `Result`, `ConditionResult` and `ExecMainStatus` alongside ActiveState (F5). It still does not confirm Minecraft connected, a cgroup empty, or a server disconnect.
 
 ## Remaining installation decisions and blockers
 
-1. **Logging (HIGH).** Do not install the current unit with raw stdout/stderr forwarded to accessible journald/syslog while claiming bot secrets are isolated from developer Codex. Choose and separately review a private fixed-path `StandardOutput=append:...`/discarded stderr design, root-opened sanitized event log, and retention/rotation policy, or deliberately accept that `daniel` is a trusted journal reader. The present root helper uses `journalctl` and must be changed if output moves to private files. Test with synthetic secret canaries before live authentication.
+1. **Logging source design completed; host acceptance BLOCKED.** Dan approved preserving administrator privileges and private runtime logs. Unit discards stdout/stderr; `main.js` writes the fixed bot-owned `/var/log/saracraft-bot/verification.jsonl` (0600) inside a 0700 bot-owned directory. The allowlisted `saracraftctl logs` helper reads only a bounded 256 KiB tail of that fixed file, rejects symlinks, wrong owner or unsafe modes, and discards unrecognized or oversized records. No journal fallback. Systemd may still journal its own lifecycle metadata. Validate installed effective behavior with a synthetic secret canary. Determine retention/rotation before deployment, rotating only when bot stopped and preserving private ownership; long-term unbounded disk growth is not acceptable.
 2. **Legacy launch inventory (HIGH).** Discover all services, containers, tmux tasks, cron, timers, credentials mounts and Sara-owned launch routes through an explicitly authorized bounded metadata inspection. Retire only approved mechanisms after new service is accepted, ensuring one bot connection.
 3. **Runtime and identity (HIGH).** A trusted builder must obtain pinned Linux x64 Node 22.23.5 and locked `npm ci --ignore-scripts` dependencies, verify supplier artifacts/checksums and produce immutable artifacts. No unverified download or active developer checkout as source of credential-bearing execution.
-4. **F6 headless Authflow integration.** The previous offline review observed four device-code requests through `prismarine-auth@3.1.1` with stubbed fetch. Add a locked-library integration regression before credential migration or service acceptance; do not call Microsoft endpoints during testing.
+4. **F6 headless Authflow integration.** Added an offline regression invoking locked `prismarine-auth@3.1.1` with global fetch intercepted and an in-memory empty cache, verifying `AUTH_REQUIRED`, bounded device-code retries, and no code disclosure. It makes no network connection or credential read. This does not test actual Microsoft authentication.
 5. **F7 systemd hardening and availability.** Evaluate proc isolation, namespaces, IPC, kernel restrictions, AF_NETLINK/resolver requirements and missing-path behavior on credential-free disposable processes. Do not copy every hardening directive blindly onto the production service.
 6. **F8 release integrity.** The candidate hash tool is only an offline promotion aid until trusted manifest signing/storage, immutable ownership and Node/units hashes are verified. `ExecStartPre` enforcement is not claimed.
 7. **Stop timing and status.** `systemctl stop --no-block` accepts a stop job; it does **not** prove the bot terminated. Assert empty service cgroup separately. The application 175-second backstop begins after imports and the systemd 180-second limit permits additional stop timeout. No guaranteed five-second reserve.
-8. **Human administrator decision.** Keep `daniel` trusted with `sudo`/`adm`, or separately authorize hard isolation, recovery account and membership changes. This source task makes no policy change.
+8. **Human administrator decision (approved):** retain `daniel` as trusted administrator, without altering `sudo`/`adm`/`lxd` memberships. The model is operational isolation and cannot prevent a deliberately privileged administrator from viewing protected data. This source task makes no host policy change.
 
 ## Proposed Stage 2 sequence (separate explicit authorization required)
 
@@ -54,4 +54,4 @@ Recommended: `daniel` remains the human host administrator for recovery and owns
 
 Before host writes record previous files, permissions, sudoers, service status and source SHA privately. For an installation failure, inhibit and stop only the new bot unit; verify its cgroup is empty, revoke its restricted sudoers grant and restore only modified installation-owned configuration. Keep credentials private, preserve server/world data, avoid automatic legacy restart and do not alter unrelated units. Never declare rollback verified without exercising it.
 
-**Next gate:** Dan approves the trust model, logging policy and a named Stage 2 host change set; until then **installation is BLOCKED**.
+**Next gate:** Dan has approved the trust and private logging *source design*, not its installation. A separate independent review of the new private-file reader, unit output handling, status semantics and release verification plus installed-host dummy acceptance and a named Stage 2 authorization are still required. **Installation is BLOCKED**.

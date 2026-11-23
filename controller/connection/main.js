@@ -29,7 +29,8 @@ const evidence = process.env.SARACRAFT_EVIDENCE_PATH === '/var/log/saracraft-bot
 function report(event, details = {}) {
   const line = JSON.stringify({ time: new Date().toISOString(), run, event, ...details }) + '\n'
   appendFileSync(evidence, line, { mode: 0o600, flag: constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW })
-  process.stdout.write(line)
+  // The supervised service keeps its evidence exclusively in private JSONL.
+  if (evidence === '/auth/verification.jsonl') process.stdout.write(line)
 }
 
 async function main({ walk, observe, commanderUuid }) {

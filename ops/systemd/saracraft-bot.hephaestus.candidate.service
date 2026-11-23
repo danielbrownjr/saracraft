@@ -1,5 +1,6 @@
 # CANDIDATE REFERENCE ONLY. NOT INSTALLED, NOT ACCEPTED FOR LIVE USE.
-# Resolve logging policy and manifest/release promotion checks before installation.
+# Logging policy chosen: discard raw stdout/stderr; private JSONL evidence under bot-owned 0700 path.
+# This remains a noninstalled candidate pending real host sandbox and lifecycle verification.
 [Unit]
 Description=SaraCraft Hephaestus observation candidate, reviewed release only
 After=network-online.target
@@ -14,6 +15,8 @@ Group=saracraft-bot
 WorkingDirectory=/opt/saracraft/releases/current/controller/connection
 ExecStart=/opt/saracraft/runtimes/node-v22.23.5-linux-x64/bin/node /opt/saracraft/releases/current/controller/connection/main.js --observe
 Environment=SARACRAFT_EVIDENCE_PATH=/var/log/saracraft-bot/verification.jsonl
+StandardOutput=null
+StandardError=null
 Restart=no
 RuntimeMaxSec=180
 TimeoutStopSec=5
@@ -38,5 +41,6 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 BindPaths=/var/lib/saracraft-bot/auth:/auth
 ReadWritePaths=/var/lib/saracraft-bot/auth /var/log/saracraft-bot
 InaccessiblePaths=/srv/saracraft /etc/saracraft /run/docker.sock
-# WARNING: journald/syslog visibility is unresolved. Do not install as-is.
+# systemd lifecycle metadata may still reach journald; raw bot stdout/stderr do not.
+# The privileged helper parses only bot-owned private JSONL with strict allowlist.
 # Do not add an [Install] target or enable at boot.

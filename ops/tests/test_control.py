@@ -3,6 +3,7 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -88,12 +89,70 @@ class BackendTests(unittest.TestCase):
                         "event": "spawn", "chat": "secret"}),
             "unstructured token secret",
         ])
-        with mock.patch.object(priv, "run", return_value=result(source)), redirect_stdout(io.StringIO()) as output:
+        with mock.patch.object(priv, "read_private_log_lines", return_value=source.splitlines()), redirect_stdout(io.StringIO()) as output:
             priv.public_logs()
         self.assertEqual(len(output.getvalue().splitlines()), 1)
         self.assertNotIn("secret", output.getvalue())
         self.assertIn("AUTH_REQUIRED", output.getvalue())
 
+
+    def test_private_log_reader_checks_owner_and_mode_and_filters_content(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td) / "logs"
+            folder.mkdir(mode=0o700)
+            logfile = folder / "verification.jsonl"
+            sample = {"time": "2026-11-23T12:00:00.000Z",
+                      "run": "00000000-0000-4000-8000-000000000001",
+                      "event": "failed", "category": "AUTH_REQUIRED"}
+            logfile.write_text(json.dumps(sample) + "\n" + "secret raw text" + "\n")
+            logfile.chmod(0o600)
+            uid = os.getuid()
+            with mock.patch.object(priv, "PRIVATE_LOG_DIR", folder), \
+                 mock.patch.object(priv, "PRIVATE_LOG", logfile), \
+                 mock.patch.object(priv.pwd, "getpwnam", return_value=mock.Mock(pw_uid=uid)):
+                lines = priv.read_private_log_lines()
+                self.assertEqual(len(lines), 2)
+                with redirect_stdout(io.StringIO()) as output:
+                    priv.public_logs()
+                self.assertIn("AUTH_REQUIRED", output.getvalue())
+                self.assertNotIn("secret raw text", output.getvalue())
+                folder.chmod(0o750)
+                with self.assertRaisesRegex(RuntimeError, "directory"):
+                    priv.read_private_log_lines()
+                folder.chmod(0o700)
+                logfile.chmod(0o644)
+                with self.assertRaisesRegex(RuntimeError, "file"):
+                    priv.read_private_log_lines()
+                logfile.chmod(0o600)
+                logfile.unlink()
+                logfile.symlink_to(Path(td) / "elsewhere")
+                with self.assertRaises(OSError):
+                    priv.read_private_log_lines()
+
+    def test_private_log_reader_discards_partial_tail_and_limits_read(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td) / "logs"
+            folder.mkdir(mode=0o700)
+            logfile = folder / "verification.jsonl"
+            sample = json.dumps({"time": "2026-11-23T12:00:00.000Z",
+                                 "run": "00000000-0000-4000-8000-000000000001",
+                                 "event": "disconnected"}) + "\n"
+            logfile.write_bytes(b"x" * 512 + b"\n" + sample.encode())
+            logfile.chmod(0o600)
+            with mock.patch.object(priv, "PRIVATE_LOG_DIR", folder), \
+                 mock.patch.object(priv, "PRIVATE_LOG", logfile), \
+                 mock.patch.object(priv, "MAX_LOG_BYTES", len(sample) + 20), \
+                 mock.patch.object(priv.pwd, "getpwnam", return_value=mock.Mock(pw_uid=os.getuid())):
+                self.assertEqual(priv.read_private_log_lines(), [sample.strip()])
+
+    def test_private_log_reader_rejects_foreign_owner(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td) / "logs"
+            folder.mkdir(mode=0o700)
+            with mock.patch.object(priv, "PRIVATE_LOG_DIR", folder), \
+                 mock.patch.object(priv.pwd, "getpwnam", return_value=mock.Mock(pw_uid=os.getuid()+1000)):
+                with self.assertRaisesRegex(RuntimeError, "directory"):
+                    priv.read_private_log_lines()
 
     def test_estop_requests_stop_when_inhibit_write_fails(self):
         with mock.patch.object(priv, "validate_control_directory"), \
@@ -201,7 +260,7 @@ class BackendTests(unittest.TestCase):
             "run": "00000000-0000-4000-8000-000000000001",
             "event": "disconnected"
         })
-        with mock.patch.object(priv, "run", return_value=result(source)), redirect_stdout(io.StringIO()) as output:
+        with mock.patch.object(priv, "read_private_log_lines", return_value=source.splitlines()), redirect_stdout(io.StringIO()) as output:
             priv.public_logs()
         self.assertEqual(len(output.getvalue().splitlines()), 1)
         self.assertIn("disconnected", output.getvalue())
