@@ -125,7 +125,10 @@ def sanitize(entry):
 
 def read_private_log_lines():
     # Root-only fixed-path reader. Never fall back to journald or caller paths.
-    bot_uid = pwd.getpwnam(BOT_USER).pw_uid
+    try:
+        bot_uid = pwd.getpwnam(BOT_USER).pw_uid
+    except KeyError as error:
+        raise RuntimeError("Bot account missing") from error
     directory_fd = os.open(PRIVATE_LOG_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         directory = os.fstat(directory_fd)

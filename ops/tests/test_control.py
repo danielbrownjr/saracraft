@@ -145,6 +145,11 @@ class BackendTests(unittest.TestCase):
                  mock.patch.object(priv.pwd, "getpwnam", return_value=mock.Mock(pw_uid=os.getuid())):
                 self.assertEqual(priv.read_private_log_lines(), [sample.strip()])
 
+    def test_missing_bot_account_fails_cleanly(self):
+        with mock.patch.object(priv.pwd, "getpwnam", side_effect=KeyError("saracraft-bot")):
+            with self.assertRaisesRegex(RuntimeError, "Bot account missing"):
+                priv.read_private_log_lines()
+
     def test_private_log_reader_rejects_foreign_owner(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td) / "logs"
