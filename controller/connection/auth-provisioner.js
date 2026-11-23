@@ -1,11 +1,30 @@
 // Authentication-only workflow. Do not import Mineflayer, minecraft-protocol,
 // observe.js, movement.js, or main.js from this module.
-import { lstatSync, readdirSync } from 'node:fs'
+import { lstatSync, readdirSync, openSync, closeSync, unlinkSync, constants } from 'node:fs'
 import { identity, verifiedProfile } from './connection.js'
 import { privateDeviceCode } from './device-authorization.js'
 
 export const AUTH_ROOT = '/auth'
 export const AUTH_CACHE = '/auth/cache'
+export const AUTH_LOCK = '/auth/.provision.lock'
+
+// One attended provisioner at a time. The lock is outside /auth/cache so
+// empty-cache checks remain meaningful. A crash leaves a fail-closed stale
+// lock requiring separately authorized private cleanup; no auto-recovery.
+export function acquireProvisionLock({
+  open = openSync,
+  close = closeSync
+} = {}) {
+  const descriptor = open(AUTH_LOCK,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    0o600)
+  close(descriptor)
+}
+
+export function releaseProvisionLock({ unlink = unlinkSync } = {}) {
+  unlink(AUTH_LOCK)
+}
+
 
 export function verifyPrivateCache({
   root = AUTH_ROOT,

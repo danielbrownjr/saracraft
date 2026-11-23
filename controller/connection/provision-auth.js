@@ -3,7 +3,7 @@
 // Invoking this utility later requires separate explicit host/auth authorization.
 import { isatty } from 'node:tty'
 import { openSync, writeSync, closeSync } from 'node:fs'
-import { verifyPrivateCache, provisionAuthentication } from './auth-provisioner.js'
+import { verifyPrivateCache, provisionAuthentication, acquireProvisionLock, releaseProvisionLock } from './auth-provisioner.js'
 
 process.umask(0o077)
 const safeError = process.stderr.write.bind(process.stderr)
@@ -25,19 +25,27 @@ async function main() {
     throw new Error('Attended private terminal required')
   }
   verifyPrivateCache()
-  // No main.js, Mineflayer, or minecraft-protocol imports. Authflow is
-  // imported only after private-directory/TTY checks.
-  const deadline = setTimeout(() => process.exit(1), 8 * 60_000)
+  acquireProvisionLock()
   try {
-    const { default: library } = await import('prismarine-auth')
-    await provisionAuthentication({
-      Authflow: library.Authflow,
-      Titles: library.Titles,
-      report: () => {} // do not persist or echo authentication events
-    })
-    privateNotice('SaraCraft authentication cache provisioned for the pinned profile.')
+    // Check after exclusivity in case another invocation ran in the gap.
+    verifyPrivateCache()
+    // No main.js, Mineflayer, or minecraft-protocol imports. Authflow is
+    // imported only after private-directory/TTY/lock checks.
+    const deadline = setTimeout(() => process.exit(1), 8 * 60_000)
+    try {
+      const { default: library } = await import('prismarine-auth')
+      await provisionAuthentication({
+        Authflow: library.Authflow,
+        Titles: library.Titles,
+        report: () => {} // do not persist or echo authentication events
+      })
+      privateNotice('SaraCraft authentication cache provisioned for the pinned profile.')
+    } finally {
+      clearTimeout(deadline)
+    }
   } finally {
-    clearTimeout(deadline)
+    // On a hard timeout or kill the exclusive lock remains fail-closed.
+    releaseProvisionLock()
   }
 }
 try {

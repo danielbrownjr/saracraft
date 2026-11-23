@@ -22,7 +22,7 @@ Use Node 22.23.5 and pinned dependencies.
 
 The command requires an attended TTY on stdin/stdout, no arguments, a private
 existing `/auth` and `/auth/cache` owned by the running UID (0700), and an
-initially empty cache. It must run later under the dedicated bot identity with
+initially empty cache. An exclusive root-path-pinned `/auth/.provision.lock` prevents concurrent attended provisioning and triggers another empty-cache check after lock acquisition. A crash or hard timeout can leave this lock present, intentionally blocking retries until separately authorized, metadata-verified private recovery. It must run later under the dedicated bot identity with
 `/auth` privately bound to `/var/lib/saracraft-bot/auth`; the precise
 **auth-only launcher/sandbox and administrator-controlled entrypoint must be
 reviewed separately before installation or execution**. It uses a Microsoft

@@ -4,13 +4,36 @@ import { identity } from './connection.js'
 import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { AUTH_CACHE, verifyPrivateCache, provisionAuthentication } from './auth-provisioner.js'
+import { AUTH_CACHE, AUTH_LOCK, verifyPrivateCache, provisionAuthentication, acquireProvisionLock, releaseProvisionLock } from './auth-provisioner.js'
 
 const good = {
   token: 'SYNTHETIC-NEVER-REAL',
   profile: { name: identity.name, id: identity.uuid.replaceAll('-', '') }
 }
 const safeDir = (uid = 500) => ({ isDirectory: () => true, uid, mode: 0o40700 })
+
+test('provision lock is exclusive, fixed-path, private and never silently bypassed', () => {
+  const events = []
+  acquireProvisionLock({
+    open(path, flags, mode) {
+      assert.equal(path, AUTH_LOCK)
+      assert.equal(mode, 0o600)
+      assert.ok((flags & 0o200) !== 0) // O_EXCL on Linux CI
+      events.push('open')
+      return 13
+    },
+    close(fd) { assert.equal(fd, 13); events.push('close') }
+  })
+  releaseProvisionLock({ unlink(path) {
+    assert.equal(path, AUTH_LOCK)
+    events.push('unlink')
+  } })
+  assert.deepEqual(events, ['open', 'close', 'unlink'])
+  assert.throws(() => acquireProvisionLock({
+    open() { throw Object.assign(new Error('lock already exists'), { code: 'EEXIST' }) },
+    close() { throw new Error('unexpected close') }
+  }), /lock already exists/)
+})
 
 test('cache gate permits only the fixed, empty, private directories', () => {
   const paths = []
