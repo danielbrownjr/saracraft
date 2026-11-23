@@ -1,10 +1,11 @@
-import { appendFileSync, closeSync, lstatSync, openSync, writeSync } from 'node:fs'
+import { appendFileSync, lstatSync } from 'node:fs'
 import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import mineflayer from 'mineflayer'
 import prismarineAuth from 'prismarine-auth'
 // Import movement dynamically only in --walk. --observe cannot load pathfinder.
 import { runtimeOptions } from './runtime-config.js'
+import { privateDeviceCode } from './device-authorization.js'
 import { classify, identity, target, verifiedProfile, verifyConnection } from './connection.js'
 
 process.umask(0o077)
@@ -30,23 +31,6 @@ function report(event, details = {}) {
   process.stdout.write(line)
 }
 
-function privateDeviceCode({ verification_uri: uri, user_code: code }) {
-  const url = new URL(uri)
-  if (url.protocol !== 'https:' || !['www.microsoft.com', 'microsoft.com', 'login.live.com'].includes(url.hostname) ||
-      url.username || url.password || url.search || url.hash || !/^[A-Z0-9-]{4,16}$/i.test(code)) {
-    throw new Error('Invalid device-code response')
-  }
-  report('authorization_required')
-  // A supervised service must never attempt interactive device authorization.
-  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('AUTH_REQUIRED')
-  const tty = openSync('/dev/tty', 'w')
-  try {
-    writeSync(tty, `\nOpen ${url.href} and enter ${code} using the Microsoft account for ${identity.name}.\n\n`)
-  } finally {
-    closeSync(tty)
-  }
-}
-
 async function main({ walk, observe, commanderUuid }) {
   for (const path of ['/auth', cache]) {
     const stat = lstatSync(path)
@@ -61,7 +45,7 @@ async function main({ walk, observe, commanderUuid }) {
     // Match minecraft-protocol's built-in Microsoft device-code flow.
     const auth = new Authflow(identity.name, cache, {
       authTitle: Titles.MinecraftNintendoSwitch, deviceType: 'Nintendo', flow: 'live'
-    }, privateDeviceCode)
+    }, challenge => privateDeviceCode(challenge, { report, name: identity.name }))
     credentials = await auth.getMinecraftJavaToken({ fetchProfile: true, fetchCertificates: walk })
     verifiedProfile(credentials)
     if (walk && !credentials.certificates?.profileKeys) {

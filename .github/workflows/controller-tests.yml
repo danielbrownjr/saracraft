@@ -31,6 +31,7 @@ jobs:
       - name: Connection syntax check
         run: |
           node --check main.js
+          node --check device-authorization.js
           node --check connection.js
           node --check runtime-config.js
           node --check movement.js
