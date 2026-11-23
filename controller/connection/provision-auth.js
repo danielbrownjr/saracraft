@@ -2,7 +2,8 @@
 // Attended authentication only. NOT a Minecraft launcher or an installed unit.
 // Invoking this utility later requires separate explicit host/auth authorization.
 import { isatty } from 'node:tty'
-import { openSync, writeSync, closeSync, fsyncSync, constants } from 'node:fs'
+import { openSync, writeSync, closeSync } from 'node:fs'
+import { recordCompletion } from './auth-completion.js'
 import { verifyPrivateCache, provisionAuthentication, acquireProvisionLock, releaseProvisionLock } from './auth-provisioner.js'
 
 process.umask(0o077)
@@ -66,14 +67,7 @@ async function main() {
 // created only after verified cache commit, attended success notification, and
 // provision-lock release have all finished. No token or profile is written.
 // The privileged launcher validates receipt metadata, never its contents.
-function recordCompletion() {
-  const fd = openSync('/auth/.provision-complete',
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-    0o600)
-  try { fsyncSync(fd) } finally { closeSync(fd) }
-  const parent = openSync('/auth', constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-  try { fsyncSync(parent) } finally { closeSync(parent) }
-}
+
 try {
   await main()
   recordCompletion()
