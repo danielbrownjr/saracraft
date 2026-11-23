@@ -23,8 +23,21 @@ jobs:
         run: npm run check
         working-directory: controller
       - name: Connection dependency installation
-        run: npm ci --ignore-scripts
+        run: npm ci --ignore-scripts --no-bin-links
         working-directory: controller/connection
+      - name: Symlink-free auth packaging smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d "${RUNNER_TEMP}/saracraft-auth-package.XXXXXXXX")"
+          trap 'rm -rf -- "$stage"' EXIT
+          mkdir -p "$stage/release/controller" "$stage/runtime/bin"
+          cp -R controller/connection "$stage/release/controller/connection"
+          cp -L "$(command -v node)" "$stage/runtime/bin/node"
+          chmod 0755 "$stage/runtime/bin/node"
+          test "$("$stage/runtime/bin/node" --version)" = "v22.23.5"
+          python3 ops/auth/check_package_layout.py "$stage/release" "$stage/runtime"
+          test ! -e "$stage/release/controller/connection/node_modules/.bin"
       - name: Controller and integration unit tests
         run: npm test
         working-directory: controller
