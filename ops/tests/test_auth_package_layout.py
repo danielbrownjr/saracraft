@@ -68,7 +68,7 @@ class PackageLayoutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             release, runtime, connection, node = self.fixture(td)
             (connection / "package-lock.json").unlink()
-            with self.assertRaises(OSError):
+            with self.assertRaises(mod.PackageLayoutError):
                 mod.check_packages(release, runtime)
             (connection / "package-lock.json").write_text("{}")
             node.chmod(0o644)
