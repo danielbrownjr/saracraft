@@ -36,7 +36,7 @@ control or record the PTY. The operative boundary is separately verified
 interactive sudo authentication in a genuinely human-controlled, non-recorded
 terminal. The launcher also checks both
 terminal file descriptors, the root-owned 0600 persistent emergency inhibit,
-empty 0700 bot-owned auth/cache directories and absent provision lock,
+empty 0700 bot-owned auth/cache directories, absent provision lock and absent\ncompletion receipt,
 inactive observation service, absent active auth transient unit, and a
 root-controlled, 40-hex-SHA-named release selected by `current` with the
 `APPROVED-RELEASE` marker. The entire resolved release tree, Node runtime tree,
@@ -79,9 +79,13 @@ from an untrusted installed tree. No PR merge or deployment is implied.
 ## Private recovery, no secrets in logs
 
 **Never restart automatically.** Fatal interruption can leave
-`/auth/.provision.lock` or a partial set of **verified-account-only** cache
-files. Wrong-account and pre-verification failure must leave no cache files.
-The next invocation stops on either condition.
+`/auth/.provision.lock`, `/auth/.provision-complete`, or a partial set
+of **verified-account-only** cache files. Wrong-account and
+pre-verification failure must leave no cache files. The next invocation
+stops if any of these entries remain. An approved completed run creates a
+zero-byte, private completion receipt *after* committing the cache and
+releasing the lock. Existence of a receipt is not permission to rerun,
+consume, or discard authentication material.
 
 Only a separately authorized human administrator, in a non-recorded private
 session, may perform recovery. In particular:
@@ -91,10 +95,30 @@ session, may perform recovery. In particular:
    process is active, stop and investigate; do not remove the lock.
 2. **Metadata-only inspection.** Verify fixed directories via fd-relative,
    no-follow checks. Confirm auth root/cache owner `saracraft-bot`, mode 0700;
-   verify lock is a bot-owned, one-link, mode-0600 regular file. Enumerate only
-   names/types/modes/owners of cache entries, not contents. Never display,
+   if a lock exists, verify it is a bot-owned, one-link, mode-0600 regular file.
+   If `/auth/.provision-complete` exists, verify it is a bot-owned,
+   one-link, mode-0600 regular file of exactly zero bytes. Reject symlinks,
+   unusual hardlinks, unexpected inode types and unsafe ownership/modes; stop
+   on any unexpected state. Enumerate only names/types/modes/owners/sizes
+   of cache entries, not contents. The completed cache contract is exactly
+   `c0e6c0_live-cache.json`, `c0e6c0_xbl-cache.json`, and
+   `c0e6c0_mca-cache.json`, all nonempty, 0600, single-link, bot-owned
+   regular files. This prefix is the pinned SaraCraft69 FileCache name hash. Never display,
    download, back up to a developer path, or upload tokens to Drive.
-3. **Decide disposition.** If cache files are present, treat them as protected
+3. **Decide disposition.** Classify fixed-path states first:
+   - **Receipt present + complete valid cache + no lock:** provisioning reached
+     the verified completion point. Do not reset simply because the launcher
+     was interrupted after completion.
+   - **No receipt + cache files:** authentication may have been interrupted
+     after verified cache commit but before receipt; identity provenance is
+     unresolved, and recovery needs a separate disposition decision.
+   - **Lock present:** the provisioning attempt was interrupted or failed;
+     do not assume that a receipt or cache makes it safe to reuse.
+   - **Receipt with incomplete/unsafe cache:** treat as an inconsistent state,
+     including possible storage-failure recovery, and stop.
+   - **No receipt, no cache, no lock:** an empty preflight state; do not
+     infer previous authentication was successful.
+   If cache files are present, treat them as protected
    credentials. Revoke the account's sessions/tokens through the provider if
    compromise is suspected. Do not copy or parse them. For an incomplete commit
    or unknown identity, block reuse pending operator approval. For a successful
@@ -112,12 +136,18 @@ session, may perform recovery. In particular:
    quarantined directory and its contents to root without following symlinks,
    while preserving restrictive modes. If ownership conversion or parent
    custody cannot be verified, STOP with the inhibit still active. Recreate an empty bot-owned 0700 cache directory;
-   remove only the positively validated fixed lock, and fsync its parent
-   directory. Any unexpected names, hardlinks, ownership, mode, process state or
+   remove only a positively validated fixed lock and, **only when an authorized
+   reset explicitly includes it**, remove the validated
+   `/auth/.provision-complete` receipt via a no-follow, fd-relative operation
+   with a final same-inode check. Fsync `/auth` after removing the receipt
+   and lock and after recreating the private cache directory. Never delete a
+   receipt simply to bypass the launcher preflight. A receipt's presence
+   during recovery must be reconciled with the cache and human decision
+   before any reset. Any unexpected names, hardlinks, ownership, mode, process state or
    operation failure are a **STOP**. Secure disposal of the quarantine, if
    required, is a separate action and must not be improvised via glob or
    `rm -rf`.
-5. **Revalidate.** Confirm the new cache is empty and the lock is absent
+5. **Revalidate.** Confirm the new cache is empty, the lock is absent,\n   and the completion receipt is absent
    through metadata alone. Preserve the emergency inhibit and leave both
    systemd units inactive. Report only boolean outcomes and fixed error
    categories. No automatic retry, Microsoft sign-in or Minecraft startup.
