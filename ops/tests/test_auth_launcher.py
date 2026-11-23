@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 from contextlib import redirect_stderr
@@ -98,6 +99,69 @@ class LauncherTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "no inhibit"):
                 mod.preflight()
             check.assert_called_once_with(mod.CONTROL_INHIBIT, kind="file", exact_mode=0o600)
+
+    def test_trusted_tree_rejects_mutable_modules_runtime_and_special_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "release"
+            root.mkdir(mode=0o700)
+            nested = root / "controller" / "connection"
+            nested.mkdir(parents=True)
+            module = nested / "auth-provisioner.js"
+            module.write_text("module.exports = {}\\n")
+            uid, gid = os.getuid(), os.getgid()
+            def audit():
+                return mod.audit_trusted_tree(
+                    root, owner_uid=uid, owner_gid=gid, check_ancestors=False)
+            self.assertTrue(audit())
+            for path in [module, nested, root]:
+                original = stat.S_IMODE(path.lstat().st_mode)
+                try:
+                    path.chmod(original | 0o022)
+                    with self.assertRaises(RuntimeError):
+                        audit()
+                finally:
+                    path.chmod(original)
+            alternate = root / "linked.js"
+            os.link(module, alternate)
+            with self.assertRaises(RuntimeError):
+                audit()
+            alternate.unlink()
+            symlink = root / "redirect"
+            symlink.symlink_to(module)
+            with self.assertRaises(RuntimeError):
+                audit()
+            symlink.unlink()
+            runtime = root / "bin"
+            runtime.mkdir()
+            node = runtime / "node"
+            node.write_text("fixture")
+            node.chmod(0o4777)
+            with self.assertRaises(RuntimeError):
+                audit()
+
+    def test_tree_ancestor_gate_rejects_untrusted_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "release"
+            root.mkdir()
+            # The disposable /tmp chain is not a root-controlled path.
+            # This must fail even if the release itself is clean.
+            with self.assertRaises(RuntimeError):
+                mod.audit_trusted_tree(root)
+
+    def test_missing_bot_identity_and_interrupt_fail_closed(self):
+        with mock.patch.object(mod.os, "geteuid", return_value=0), \\
+             mock.patch.dict(mod.os.environ, {"SUDO_USER": "daniel"}), \\
+             mock.patch.object(mod.os, "isatty", return_value=True), \\
+             mock.patch("builtins.open", mock.mock_open()) as tty, \\
+             mock.patch.object(mod, "check_root_path"), \\
+             mock.patch.object(mod.pwd, "getpwnam", side_effect=KeyError("missing")):
+            tty.return_value.__enter__.return_value.fileno.return_value = 4
+            with self.assertRaisesRegex(RuntimeError, "account unavailable"):
+                mod.preflight()
+        with mock.patch.object(mod, "preflight", side_effect=KeyboardInterrupt), \\
+             redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(mod.main([]), 130)
+            self.assertIn("keep inhibit active", stderr.getvalue())
 
     def test_main_dispatches_only_fixed_command_and_generic_failure(self):
         entry = Path("/opt/saracraft/releases/" + "a" * 40 + "/controller/connection/provision-auth.js")
