@@ -10,6 +10,39 @@ The direct Mineflayer transport does not load Mindcraft CE's agent and model sta
 - Mineflayer 4.39.0, mineflayer-pathfinder 2.4.5, prismarine-auth 3.1.1 and the locked minecraft-protocol 1.68.0.
 - From this directory, run `npm ci --ignore-scripts` and `npm test` using that Node runtime. The tests use mock events, never Microsoft authentication or an online Minecraft server.
 
+## Authentication-only provisioner (source candidate, NOT installed)
+
+`node provision-auth.js` is a separate entrypoint. Unlike `main.js`, it
+does not import Mineflayer, connect to Paper, create a Minecraft bot, or load
+movement/observation code. Its only purpose is to populate an **empty** private
+`/auth/cache` through the locked `prismarine-auth` Microsoft/Xbox/Minecraft
+authentication APIs, verify the **pinned** SaraCraft69 Java profile and UUID,
+and stop. The Minecraft *profile API* is not a Minecraft *game server*.
+Use Node 22.23.5 and pinned dependencies.
+
+The command requires an attended TTY on stdin/stdout, no arguments, a private
+existing `/auth` and `/auth/cache` owned by the running UID (0700), and an
+initially empty cache. It must run later under the dedicated bot identity with
+`/auth` privately bound to `/var/lib/saracraft-bot/auth`; the precise
+**auth-only launcher/sandbox and administrator-controlled entrypoint must be
+reviewed separately before installation or execution**. It uses a Microsoft
+device-code prompt written only to `/dev/tty`, suppresses library console
+output and never reports tokens or challenge codes to stdout, stderr or journal.
+The real auth library may write token cache files within the private directory;
+it is intentionally never run during source tests. The process has an 8-minute
+backstop. Interrupted or wrong-account attempts can leave partial or mismatched
+private cache state: do not retry automatically or expose its contents.
+Privileged cleanup/reset requires separate review and authorization.
+
+**Important:** Source implementation and offline tests do not authorize
+Microsoft authentication, credential migration, installation, movement,
+Minecraft connections or clearing the production emergency inhibit.
+The installed Stage 2 release remains at
+`50a2159fe46f279cda18ec8d5529b079466ed4a9` with its inhibit active.
+A new manifest and installed release require a separate promotion gate after
+independent security review. The live stationary observation still requires
+a separate attended go/no-go check and server-side disconnect verification.
+
 ## Device authorization and evidence
 
 Run the verifier from a private interactive terminal on Hephaestus. It requires an approved Docker operator to start the container with an attached TTY, Docker logging disabled, and a dedicated mount at `/auth`. Use the intended Microsoft account in the browser and enter the displayed code only at the Microsoft URL shown in the terminal. Keep the terminal open until the verifier exits. There are no credential environment variables. The target, Minecraft version and identity are fixed for this milestone.

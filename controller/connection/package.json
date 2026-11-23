@@ -8,7 +8,8 @@
   },
   "scripts": {
     "test": "node --test",
-    "start": "node main.js"
+    "start": "node main.js",
+    "auth:provision": "node provision-auth.js"
   },
   "dependencies": {
     "mineflayer": "4.39.0",
