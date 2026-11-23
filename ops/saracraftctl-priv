@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 """Root-installed allowlisted SaraCraft control backend; never runs arbitrary arguments.
 
 This file must be owned by root and not writable by the developer or bot.
@@ -99,7 +99,7 @@ def public_logs():
         if len(line) > 4096: continue
         try:
             safe = sanitize(json.loads(line))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             continue
         if safe is not None: entries.append(safe)
     for entry in entries[-100:]:
@@ -113,43 +113,77 @@ def validate_control_directory():
     if st.st_uid != 0 or (st.st_mode & 0o077) != 0:
         raise RuntimeError("Control directory permissions are unsafe")
 
+def stop_now():
+    # Stop must be independent of persistence, directory validation, and locks.
+    # The no-block systemd stop job replaces a queued start job for this unit.
+    result = run([SYSTEMCTL, "stop", "--no-block", UNIT])
+    if result.returncode:
+        raise RuntimeError("Restricted service stop request failed")
+
+def emergency_stop():
+    # Persistence is best effort, but termination is always attempted, even if
+    # the control directory is missing, read-only or otherwise untrustworthy.
+    inhibit_error = None
+    try:
+        validate_control_directory()
+        try:
+            descriptor = os.open(INHIBIT, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            if not INHIBIT.is_file() or INHIBIT.is_symlink():
+                raise RuntimeError("Emergency inhibit path is unsafe")
+        else:
+            os.close(descriptor)
+    except (OSError, RuntimeError) as error:
+        inhibit_error = error
+    stop_error = None
+    try:
+        stop_now()
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        stop_error = error
+    if inhibit_error is not None or stop_error is not None:
+        print("PARTIAL: emergency stop could not verify both termination request and persistent inhibit", file=sys.stderr)
+        return 1
+    print("Accepted: estop (stop requested and inhibit persisted)")
+    return 0
+
 def control(operation):
+    if operation == "stop":
+        stop_now()
+        print("Accepted: stop (stop requested)")
+        return 0
+    if operation == "estop":
+        return emergency_stop()
+    # Read-only operations never wait on the start/clear lock.
+    if operation == "status":
+        validate_control_directory()
+        print(json.dumps({"state": unit_state(), "emergency_inhibit": INHIBIT.exists()}, sort_keys=True))
+        return 0
+    if operation == "logs":
+        public_logs()
+        return 0
+    # Only start and privileged inhibit clearance require serialization.
     validate_control_directory()
     descriptor = os.open(LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX)
-        if operation == "status":
-            print(json.dumps({"state": unit_state(), "emergency_inhibit": INHIBIT.exists()}, sort_keys=True))
-            return 0
-        if operation == "logs":
-            public_logs()
-            return 0
         if operation == "start-observe":
             if INHIBIT.exists():
                 raise RuntimeError("Emergency inhibit active; privileged clearance required")
             if unit_state() not in ("inactive", "failed"):
                 raise RuntimeError("SaraCraft already running or starting")
-            args = [SYSTEMCTL, "start", "--no-block", UNIT]
-        elif operation == "stop":
-            args = [SYSTEMCTL, "stop", "--no-block", UNIT]
-        elif operation == "estop":
-            marker = os.open(INHIBIT, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600) if not INHIBIT.exists() else None
-            if marker is not None: os.close(marker)
-            args = [SYSTEMCTL, "stop", "--no-block", UNIT]
-        elif operation == "clear-inhibit":
-            # Deliberately absent from operator sudoers grants; manual admin only.
+            result = run([SYSTEMCTL, "start", "--no-block", UNIT])
+            if result.returncode:
+                raise RuntimeError("Restricted service start request failed")
+            print("Accepted: start-observe (start requested; not a connection confirmation)")
+            return 0
+        if operation == "clear-inhibit":
+            # Absent from operator sudoers; only explicitly authorized root admin.
             if unit_state() not in ("inactive", "failed"):
                 raise RuntimeError("Stop service before clearing inhibit")
             INHIBIT.unlink(missing_ok=True)
             print("Emergency inhibit cleared by administrator")
             return 0
-        else:
-            raise RuntimeError("Unsupported operation")
-        result = run(args)
-        if result.returncode:
-            raise RuntimeError("Restricted service operation failed")
-        print("Accepted: " + operation)
-        return 0
+        raise RuntimeError("Unsupported operation")
     finally:
         os.close(descriptor)
 

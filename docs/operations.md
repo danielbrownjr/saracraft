@@ -21,13 +21,13 @@ saracraftctl stop
 saracraftctl estop
 ```
 
-No arbitrary flags, unit names, release paths, environment overrides, or shell fragments. The unprivileged CLI maps to five exact noninteractive sudo backend operations. An emergency stop writes a persistent inhibit and queues a systemd stop; it must remain inhibited through reboot and subsequent start requests. To clear it, a separately authorized administrator first verifies the runtime is stopped, then uses the root-only `clear-inhibit` operation. It is **not** part of Daniel's sudo grant.
+No arbitrary flags, unit names, release paths, environment overrides, or shell fragments. The unprivileged CLI maps to five exact noninteractive sudo backend operations. An emergency stop attempts to persist an inhibit and **always** requests a systemd stop regardless of permission, filesystem, or lock failures. It reports PARTIAL and exits nonzero if either persistence or the stop request cannot be confirmed. The inhibit must remain effective through reboot and subsequent start requests. Plain `stop` also bypasses all persistence and locks. To clear it, a separately authorized administrator first verifies the runtime is stopped, then uses the root-only `clear-inhibit` operation. It is **not** part of Daniel's sudo grant.
 
 `status` reports only systemd ActiveState and inhibit status in this Stage 1 prototype; it does **not** establish that Minecraft is connected or report a verified release SHA. Operational readiness and game-level disconnect still require separate telemetry/server corroboration. `logs` parses only allowlisted JSON events/fields from the fixed service unit journal and discards unknown/freeform entries. It does not expose arbitrary journal entries, authentication codes, usernames, UUIDs, positions, or credentials. The journal is still privileged, so host log routing/privacy requires installation review.
 
 ## Startup limits and credentials
 
-The proposed launcher observation deadline begins before authentication or client construction, with an early shutdown signal and a short hard-exit fallback. At most **one** observation connection attempt is permitted. Service `RuntimeMaxSec=180` is an independent process-lifetime ceiling, with application shutdown reserve before that ceiling; neither bound is proof of immediate server-side disconnect.
+The proposed launcher ends a normal observation after 150 seconds of readiness, allowing clean completion. A separate 175-second overall backstop begins before authentication or client construction, with an early shutdown signal and short hard-exit fallback. Static imports precede this timer, so the interval to systemd's 180-second cap is **not** a guaranteed five-second reserve. At most **one** observation connection attempt is permitted. Service `RuntimeMaxSec=180` is an independent process-lifetime ceiling, with application shutdown reserve before that ceiling; neither bound is proof of immediate server-side disconnect.
 
 A headless device-auth challenge returns `AUTH_REQUIRED` without displaying device codes or opening a terminal. Authentication must be established through a separately approved interactive operation before service use. The existing interactive verifier and optional movement mode retain their separate behaviors.
 
@@ -49,7 +49,7 @@ Evidence has a fixed default under `/auth/verification.jsonl` for existing manua
 
 Run `python3 -m unittest discover -s ops/tests -v` (Python standard library only), `python3 -m py_compile ops/saracraftctl ops/saracraftctl-priv`, connection Node regressions, and exact-head CI. These checks test parsers, allowlists and mocked lifecycle; they do **not** establish that systemd sandboxing, the actual host binary, stop kinetics, credentials or the world state are safe.
 
-Do not install units, alter permissions, deploy, authenticate, merge or start Minecraft as part of Stage 1. The complete source requires initial independent read-only security review before a separate host installation decision.
+Do not install units, alter permissions, deploy, authenticate, merge or start Minecraft as part of Stage 1. The initial independent review identified F1-F3 as required corrections; a focused re-review is pending before any separately authorized host installation.
 
 ## Rollback plan for a future, separately authorized installation
 

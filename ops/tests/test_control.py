@@ -94,6 +94,64 @@ class BackendTests(unittest.TestCase):
         self.assertNotIn("secret", output.getvalue())
         self.assertIn("AUTH_REQUIRED", output.getvalue())
 
+
+    def test_estop_requests_stop_when_inhibit_write_fails(self):
+        with mock.patch.object(priv, "validate_control_directory"), \
+             mock.patch.object(priv.os, "open", side_effect=OSError("read-only")), \
+             mock.patch.object(priv, "run", return_value=result()) as run, \
+             redirect_stderr(io.StringIO()) as output:
+            self.assertEqual(priv.emergency_stop(), 1)
+        run.assert_called_once_with(["/usr/bin/systemctl", "stop", "--no-block", "saracraft-bot.service"])
+        self.assertIn("PARTIAL", output.getvalue())
+
+    def test_estop_requests_stop_despite_invalid_control_directory(self):
+        with mock.patch.object(priv, "validate_control_directory", side_effect=RuntimeError("unsafe")), \
+             mock.patch.object(priv, "run", return_value=result()) as run, \
+             redirect_stderr(io.StringIO()) as output:
+            self.assertEqual(priv.emergency_stop(), 1)
+        run.assert_called_once_with(["/usr/bin/systemctl", "stop", "--no-block", "saracraft-bot.service"])
+        self.assertIn("PARTIAL", output.getvalue())
+
+    def test_estop_and_stop_do_not_obtain_operation_lock(self):
+        with mock.patch.object(priv, "validate_control_directory", side_effect=RuntimeError("unsafe")), \
+             mock.patch.object(priv.fcntl, "flock", side_effect=AssertionError("lock acquired")), \
+             mock.patch.object(priv, "run", return_value=result()) as run, \
+             redirect_stderr(io.StringIO()):
+            self.assertEqual(priv.control("estop"), 1)
+            self.assertEqual(priv.control("stop"), 0)
+        self.assertEqual(run.call_count, 2)
+        for call in run.call_args_list:
+            self.assertEqual(call.args[0], ["/usr/bin/systemctl", "stop", "--no-block", "saracraft-bot.service"])
+
+    def test_status_and_logs_skip_exclusive_lock(self):
+        with mock.patch.object(priv, "validate_control_directory"), \
+             mock.patch.object(priv, "unit_state", return_value="inactive"), \
+             mock.patch.object(priv, "public_logs"), \
+             mock.patch.object(priv, "INHIBIT", mock.Mock(exists=lambda: False)), \
+             mock.patch.object(priv.fcntl, "flock", side_effect=AssertionError("lock acquired")), \
+             redirect_stdout(io.StringIO()):
+            self.assertEqual(priv.control("status"), 0)
+            self.assertEqual(priv.control("logs"), 0)
+
+    def test_estop_reports_both_failed_stop_and_inhibit(self):
+        with mock.patch.object(priv, "validate_control_directory", side_effect=RuntimeError("unsafe")), \
+             mock.patch.object(priv, "run", return_value=result(code=1)) as run, \
+             redirect_stderr(io.StringIO()) as output:
+            self.assertEqual(priv.emergency_stop(), 1)
+        run.assert_called_once()
+        self.assertIn("PARTIAL", output.getvalue())
+
+    def test_deeply_nested_log_json_is_discarded_not_fatal(self):
+        source = "[" * 4096 + "\n" + json.dumps({
+            "time": "2026-11-23T12:00:00.000Z",
+            "run": "00000000-0000-4000-8000-000000000001",
+            "event": "disconnected"
+        })
+        with mock.patch.object(priv, "run", return_value=result(source)), redirect_stdout(io.StringIO()) as output:
+            priv.public_logs()
+        self.assertEqual(len(output.getvalue().splitlines()), 1)
+        self.assertIn("disconnected", output.getvalue())
+
     def test_operations_single_unit_and_persistent_estop(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)

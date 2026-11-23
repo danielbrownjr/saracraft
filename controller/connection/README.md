@@ -22,7 +22,7 @@ If authentication resolves to another Minecraft profile, the verifier closes wit
 
 ## Observation-only diagnostics (requires separate live authorization)
 
-`node main.js --observe` has a 175-second total application deadline beginning before authentication, plus a 5-second shutdown reserve under the proposed 180-second systemd process ceiling. It has at most one connection attempt. A headless authentication challenge fails with `AUTH_REQUIRED` without displaying a code or accessing `/dev/tty`. The service uses a separate private evidence directory; the existing manual verifier's default remains `/auth/verification.jsonl`. Observation has a
+`node main.js --observe` has a 150-second normal observation window after readiness and a 175-second overall application backstop beginning before authentication. The proposed independent systemd ceiling is 180 seconds from process exec; startup imports and shutdown consume time, so no exact 5-second reserve is guaranteed. It has at most one connection attempt. A headless authentication challenge fails with `AUTH_REQUIRED` without displaying a code or accessing `/dev/tty`. The service uses a separate private evidence directory; the existing manual verifier's default remains `/auth/verification.jsonl`. Observation has a
 physics-disabled session, no signed-chat certificate request, no movement adapter or
 pathfinder import, and no player-chat movement command listener. Positive
 control-state changes and pathfinder access are prohibited. It samples sanitized

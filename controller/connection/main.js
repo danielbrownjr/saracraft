@@ -6,6 +6,7 @@ import prismarineAuth from 'prismarine-auth'
 // Import movement dynamically only in --walk. --observe cannot load pathfinder.
 import { runtimeOptions } from './runtime-config.js'
 import { privateDeviceCode } from './device-authorization.js'
+import { observationTiming } from './observation-policy.js'
 import { classify, identity, target, verifiedProfile, verifyConnection } from './connection.js'
 
 process.umask(0o077)
@@ -70,7 +71,7 @@ async function main({ walk, observe, commanderUuid }) {
   } : report
   return verifyConnection({
     config: target, report: trialReport, signal: abort.signal,
-    stay: walk || observe, sessionMs: observe ? 175_000 : 480_000,
+    stay: walk || observe, sessionMs: observe ? observationTiming.sessionMs : 480_000,
     maxAttempts: observe ? 1 : 2,
     onClosing: () => attachment?.dispose(),
     createBot: () => {
@@ -115,14 +116,15 @@ async function main({ walk, observe, commanderUuid }) {
 try {
   const options = runtimeOptions(process.argv.slice(2), process.env)
   // Observation's overall clock starts before authentication and bot creation.
-  // Reserve 5 seconds for graceful shutdown under systemd's 180-second ceiling.
+  // Backstop: a normal 150s observe run may exit cleanly before the 175s deadline.
+  // Imports run before this timer; the systemd 180s ceiling is independent.
   const deadline = setTimeout(() => {
     report('failed', { category: options.observe ? 'session_deadline' : 'authentication_timeout' })
     abort.abort()
     const forceExit = setTimeout(() => process.exit(1), options.observe ? 4_000 : 0)
     forceExit.unref()
     if (!options.observe) process.exit(1)
-  }, options.observe ? 175_000 : (options.walk ? 17 : 8) * 60_000)
+  }, options.observe ? observationTiming.deadlineMs : (options.walk ? 17 : 8) * 60_000)
   deadline.unref()
   try {
     process.exitCode = (await main(options)) && !abort.signal.aborted ? 0 : 1
