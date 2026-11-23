@@ -1,6 +1,6 @@
 # SaraCraft connection and movement integration
 
-This one-shot Mineflayer transport lives alongside the controller prototype. It checks the Microsoft-authenticated profile against the fixed SaraCraft69 UUID before opening a Minecraft connection. It targets only Hephaestus at 192.168.1.127:25565 using Minecraft Java 1.21.11. The verifier reports login, spawn, a loaded chunk and player presence, then disconnects. It runs with physics disabled and does not send chat, gameplay or administrative commands. It permits one reconnect after a transient pre-spawn disconnect.
+This one-shot Mineflayer transport lives alongside the controller prototype. It checks the Microsoft-authenticated profile against the fixed SaraCraft69 UUID before opening a Minecraft connection. It targets only Hephaestus at 192.168.1.127:25565 using Minecraft Java 1.21.11. The verifier reports login, spawn, a loaded chunk and player presence, then disconnects. It runs with physics disabled and does not send chat, gameplay or administrative commands. The default first-login verifier permits one reconnect after a transient pre-spawn disconnect; `--observe` permits exactly one connection attempt.
 
 The direct Mineflayer transport does not load Mindcraft CE's agent and model stack. The default first-login mode remains separate from the optional movement mode described below.
 
@@ -22,8 +22,8 @@ If authentication resolves to another Minecraft profile, the verifier closes wit
 
 ## Observation-only diagnostics (requires separate live authorization)
 
-`node main.js --observe` has a 180-second stationary connection window,
-physics disabled, no signed-chat certificate request, no movement adapter or
+`node main.js --observe` has a 175-second total application deadline beginning before authentication, plus a 5-second shutdown reserve under the proposed 180-second systemd process ceiling. It has at most one connection attempt. A headless authentication challenge fails with `AUTH_REQUIRED` without displaying a code or accessing `/dev/tty`. The service uses a separate private evidence directory; the existing manual verifier's default remains `/auth/verification.jsonl`. Observation has a
+physics-disabled session, no signed-chat certificate request, no movement adapter or
 pathfinder import, and no player-chat movement command listener. Positive
 control-state changes and pathfinder access are prohibited. It samples sanitized
 air metadata, chunk coverage, entity readiness and hazard observations at about

@@ -35,17 +35,18 @@ export function classify(source, error) {
 // The caller owns the shutdown signal. Only transport failures before spawn are retried.
 export async function verifyConnection({ createBot, config, report, signal, timeoutMs = 30_000,
   heartbeatMs = 5_000, closeMs = 5_000, retryDelayMs = 2_000, stay = false, sessionMs = 480_000,
-  onClosing = () => {} }) {
+  onClosing = () => {}, maxAttempts = 2 }) {
   checkTarget(config)
-  if (typeof stay !== 'boolean' || !Number.isFinite(sessionMs) || sessionMs <= 0 || sessionMs > 480_000) {
+  if (typeof stay !== 'boolean' || !Number.isFinite(sessionMs) || sessionMs <= 0 || sessionMs > 480_000 ||
+      !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 2) {
     throw new Error('Invalid bounded movement session')
   }
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (signal?.aborted) return false
     report('connecting', { attempt })
     const outcome = await observe(createBot, report, signal, timeoutMs, heartbeatMs, closeMs, stay, sessionMs, onClosing)
     if (outcome.ok) return true
-    if (attempt === 2 || outcome.spawned || signal?.aborted ||
+    if (attempt === maxAttempts || outcome.spawned || signal?.aborted ||
         !['network', 'disconnection'].includes(outcome.category) || !outcome.closed) return false
     report('reconnecting', { attempt: attempt + 1 })
     await delay(retryDelayMs, undefined, { signal }).catch(error => {

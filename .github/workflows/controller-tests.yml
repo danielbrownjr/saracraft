@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'controller/**'
+      - 'ops/**'
       - '.github/workflows/controller-tests.yml'
   workflow_dispatch:
 
@@ -38,6 +39,10 @@ jobs:
       - name: Connection unit tests
         run: npm test
         working-directory: controller/connection
+      - name: Restricted operations interface tests
+        run: |
+          python3 -m py_compile ops/saracraftctl ops/saracraftctl-priv
+          python3 -m unittest discover -s ops/tests -v
       - name: Navigation safety syntax check
         run: node --check safety.js
         working-directory: controller/navigation

@@ -1,0 +1,8 @@
+# EXAMPLE ONLY, not installed. Validate with visudo -cf before separately approved host changes.
+# The privileged helper and every parent directory must be root-owned/non-writable by daniel.
+# Do not grant wildcard arguments, general systemctl, shell, Docker, or clear-inhibit.
+daniel ALL=(root) NOPASSWD: /usr/local/libexec/saracraftctl-priv start-observe
+daniel ALL=(root) NOPASSWD: /usr/local/libexec/saracraftctl-priv status
+daniel ALL=(root) NOPASSWD: /usr/local/libexec/saracraftctl-priv stop
+daniel ALL=(root) NOPASSWD: /usr/local/libexec/saracraftctl-priv logs
+daniel ALL=(root) NOPASSWD: /usr/local/libexec/saracraftctl-priv estop

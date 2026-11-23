@@ -20,7 +20,9 @@ function shutdown() {
 process.once('SIGINT', shutdown)
 process.once('SIGTERM', shutdown)
 const cache = '/auth/cache'
-const evidence = '/auth/verification.jsonl'
+// The only accepted service-specific override is a fixed, reviewable destination.
+const evidence = process.env.SARACRAFT_EVIDENCE_PATH === '/var/log/saracraft-bot/verification.jsonl'
+  ? '/var/log/saracraft-bot/verification.jsonl' : '/auth/verification.jsonl'
 
 function report(event, details = {}) {
   const line = JSON.stringify({ time: new Date().toISOString(), run, event, ...details }) + '\n'
@@ -35,6 +37,8 @@ function privateDeviceCode({ verification_uri: uri, user_code: code }) {
     throw new Error('Invalid device-code response')
   }
   report('authorization_required')
+  // A supervised service must never attempt interactive device authorization.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('AUTH_REQUIRED')
   const tty = openSync('/dev/tty', 'w')
   try {
     writeSync(tty, `\nOpen ${url.href} and enter ${code} using the Microsoft account for ${identity.name}.\n\n`)
@@ -65,7 +69,7 @@ async function main({ walk, observe, commanderUuid }) {
       return false
     }
   } catch (error) {
-    report('failed', { category: classify('auth', error) })
+    report('failed', { category: error?.message === 'AUTH_REQUIRED' ? 'AUTH_REQUIRED' : classify('auth', error) })
     return false
   }
   if (abort.signal.aborted) return false
@@ -82,7 +86,8 @@ async function main({ walk, observe, commanderUuid }) {
   } : report
   return verifyConnection({
     config: target, report: trialReport, signal: abort.signal,
-    stay: walk || observe, sessionMs: observe ? 180_000 : 480_000,
+    stay: walk || observe, sessionMs: observe ? 175_000 : 480_000,
+    maxAttempts: observe ? 1 : 2,
     onClosing: () => attachment?.dispose(),
     createBot: () => {
       const bot = mineflayer.createBot({
@@ -125,13 +130,21 @@ async function main({ walk, observe, commanderUuid }) {
 
 try {
   const options = runtimeOptions(process.argv.slice(2), process.env)
-  const authDeadline = setTimeout(() => {
-    report('failed', { category: 'authentication_timeout' })
-    process.exit(1)
-  }, (options.walk ? 17 : options.observe ? 9 : 8) * 60_000)
-  authDeadline.unref()
-  process.exitCode = (await main(options)) ? 0 : 1
-  clearTimeout(authDeadline)
+  // Observation's overall clock starts before authentication and bot creation.
+  // Reserve 5 seconds for graceful shutdown under systemd's 180-second ceiling.
+  const deadline = setTimeout(() => {
+    report('failed', { category: options.observe ? 'session_deadline' : 'authentication_timeout' })
+    abort.abort()
+    const forceExit = setTimeout(() => process.exit(1), options.observe ? 4_000 : 0)
+    forceExit.unref()
+    if (!options.observe) process.exit(1)
+  }, options.observe ? 175_000 : (options.walk ? 17 : 8) * 60_000)
+  deadline.unref()
+  try {
+    process.exitCode = (await main(options)) && !abort.signal.aborted ? 0 : 1
+  } finally {
+    clearTimeout(deadline)
+  }
 } catch {
   process.stdout.write('SaraCraft verification failed during setup.\n')
   process.exitCode = 1

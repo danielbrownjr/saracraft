@@ -78,6 +78,20 @@ test('retries one network failure and classifies failures without logging raw se
   assert.ok(!JSON.stringify(events).includes('secret'))
 })
 
+test('observation supports exactly one connection attempt', async () => {
+  const result = await scenarios([bot => bot.emit('error', new Error('socket timeout'))], { maxAttempts: 1 })
+  assert.equal(result.result, false)
+  assert.equal(result.attempts, 1)
+  assert.equal(result.events.some(e => e.event === 'reconnecting'), false)
+})
+
+test('invalid connection attempt limits fail before constructing a bot', async () => {
+  for (const maxAttempts of [0, -1, 3, 1.5, NaN]) {
+    await assert.rejects(verifyConnection({ config: target, maxAttempts,
+      report() {}, createBot() { assert.fail('must not create bot') } }), /Invalid bounded/)
+  }
+})
+
 test('allowlist rejection and loss after spawn do not reconnect', async () => {
   const kicked = await scenarios([bot => bot.emit('kicked', 'not whitelisted')])
   assert.equal(kicked.attempts, 1)

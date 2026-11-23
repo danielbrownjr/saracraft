@@ -1,0 +1,170 @@
+#!/usr/bin/python3
+"""Root-installed allowlisted SaraCraft control backend; never runs arbitrary arguments.
+
+This file must be owned by root and not writable by the developer or bot.
+The service and its root-controlled release must be installed separately.
+"""
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+UNIT = "saracraft-bot.service"
+SYSTEMCTL = "/usr/bin/systemctl"
+JOURNALCTL = "/usr/bin/journalctl"
+CONTROL_DIR = Path("/var/lib/saracraft-control")
+LOCK = CONTROL_DIR / "operations.lock"
+INHIBIT = CONTROL_DIR / "inhibit"
+ALLOWED = {"start-observe", "status", "stop", "logs", "estop", "clear-inhibit"}
+SAFE_EVENT = {
+    "authenticating": set(),
+    "authorization_required": set(),
+    "failed": {"category"},
+    "identity_verified": set(),
+    "connecting": {"attempt"},
+    "login": set(),
+    "spawn": set(),
+    "world_received": set(),
+    "player_presence": {"self"},
+    "observation_ready": set(),
+    "telemetry_sample": {"rawAirReceived", "airPacketCount", "airPacketAgeMs",
+                         "chunkColumnsLoaded", "entityCount", "entitiesObserved",
+                         "inWater", "blockVolumeInWater", "physicsWaterFlag",
+                         "creeperDistanceBlocks", "verdict"},
+    "heartbeat": {"spawned", "world", "presence"},
+    "disconnected": set(),
+    "reconnecting": {"attempt"},
+}
+CATEGORIES = {"authentication", "AUTH_REQUIRED", "authentication_timeout",
+              "session_deadline", "chat_certificate_unavailable",
+              "network", "disconnection", "allowlist", "version_mismatch",
+              "movement_halt", "shutdown"}
+SAFE_STATE = re.compile(r"^(inactive|active|activating|deactivating|failed|reloading)$")
+SAFE_REASON = re.compile(r"^[a-z_]{1,48}$")
+
+def run(args):
+    return subprocess.run(args, text=True, capture_output=True, timeout=12, check=False,
+                          env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+
+def unit_state():
+    result = run([SYSTEMCTL, "show", UNIT, "--property=ActiveState", "--value"])
+    state = result.stdout.strip()
+    if result.returncode or not SAFE_STATE.fullmatch(state):
+        raise RuntimeError("Unable to determine restricted bot service state")
+    return state
+
+def sanitize(entry):
+    """Never forward raw journal text, unrecognized events or extra keys."""
+    if not isinstance(entry, dict) or set(entry) - ({"time", "run", "event"} | set(SAFE_EVENT.get(entry.get("event"), ()))):
+        return None
+    event = entry.get("event")
+    if event not in SAFE_EVENT or not isinstance(entry.get("time"), str) or not isinstance(entry.get("run"), str):
+        return None
+    if not re.fullmatch(r"\d{4}-\d\d-\d\dT[\d:.]+Z", entry["time"]):
+        return None
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", entry["run"]):
+        return None
+    result = {"time": entry["time"], "event": event}
+    for name in SAFE_EVENT[event]:
+        if name not in entry:
+            continue
+        value = entry[name]
+        if name == "category":
+            if value not in CATEGORIES: return None
+        elif name == "physicsWaterFlag":
+            if value != "unavailable_physics_disabled": return None
+        elif name == "verdict":
+            if value not in ("UNKNOWN_STATE", "STATE_UNAVAILABLE"): return None
+        elif name in ("rawAirReceived", "entitiesObserved", "self", "spawned", "world", "presence"):
+            if type(value) is not bool: return None
+        elif name in ("inWater", "blockVolumeInWater"):
+            if value is not None and type(value) is not bool: return None
+        elif name in ("attempt", "airPacketCount", "airPacketAgeMs", "chunkColumnsLoaded",
+                      "entityCount", "creeperDistanceBlocks"):
+            if value is not None and (type(value) is not int or not 0 <= value <= 1_000_000):
+                return None
+        else:
+            return None
+        result[name] = value
+    return result
+
+def public_logs():
+    result = run([JOURNALCTL, "--no-pager", "--output=cat", "-u", UNIT, "-n", "150"])
+    if result.returncode: raise RuntimeError("Sanitized logs unavailable")
+    entries = []
+    for line in result.stdout.splitlines():
+        if len(line) > 4096: continue
+        try:
+            safe = sanitize(json.loads(line))
+        except (ValueError, TypeError):
+            continue
+        if safe is not None: entries.append(safe)
+    for entry in entries[-100:]:
+        print(json.dumps(entry, separators=(",", ":"), sort_keys=True))
+
+def validate_control_directory():
+    # The installation contract requires an existing root-owned 0700 directory.
+    if not CONTROL_DIR.is_dir() or CONTROL_DIR.is_symlink():
+        raise RuntimeError("Control directory is not installed safely")
+    st = CONTROL_DIR.stat()
+    if st.st_uid != 0 or (st.st_mode & 0o077) != 0:
+        raise RuntimeError("Control directory permissions are unsafe")
+
+def control(operation):
+    validate_control_directory()
+    descriptor = os.open(LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        if operation == "status":
+            print(json.dumps({"state": unit_state(), "emergency_inhibit": INHIBIT.exists()}, sort_keys=True))
+            return 0
+        if operation == "logs":
+            public_logs()
+            return 0
+        if operation == "start-observe":
+            if INHIBIT.exists():
+                raise RuntimeError("Emergency inhibit active; privileged clearance required")
+            if unit_state() not in ("inactive", "failed"):
+                raise RuntimeError("SaraCraft already running or starting")
+            args = [SYSTEMCTL, "start", "--no-block", UNIT]
+        elif operation == "stop":
+            args = [SYSTEMCTL, "stop", "--no-block", UNIT]
+        elif operation == "estop":
+            marker = os.open(INHIBIT, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600) if not INHIBIT.exists() else None
+            if marker is not None: os.close(marker)
+            args = [SYSTEMCTL, "stop", "--no-block", UNIT]
+        elif operation == "clear-inhibit":
+            # Deliberately absent from operator sudoers grants; manual admin only.
+            if unit_state() not in ("inactive", "failed"):
+                raise RuntimeError("Stop service before clearing inhibit")
+            INHIBIT.unlink(missing_ok=True)
+            print("Emergency inhibit cleared by administrator")
+            return 0
+        else:
+            raise RuntimeError("Unsupported operation")
+        result = run(args)
+        if result.returncode:
+            raise RuntimeError("Restricted service operation failed")
+        print("Accepted: " + operation)
+        return 0
+    finally:
+        os.close(descriptor)
+
+def main(argv):
+    if len(argv) != 1 or argv[0] not in ALLOWED:
+        print("Unsupported restricted operation", file=sys.stderr)
+        return 2
+    if os.geteuid() != 0:
+        print("Restricted helper requires root", file=sys.stderr)
+        return 1
+    try:
+        return control(argv[0])
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        print("SaraCraft control failed: " + str(error), file=sys.stderr)
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
