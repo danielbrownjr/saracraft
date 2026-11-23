@@ -42,6 +42,34 @@ def check_root_path(path, *, kind="directory", exact_mode=None):
         raise RuntimeError("Trusted authentication installation path is unsafe")
 
 
+def audit_trusted_tree(root, *, owner_uid=0, owner_gid=0, check_ancestors=True):
+    """Fail closed on mutable, linked, foreign-owned or special executable inputs.
+
+    This metadata audit is deliberately implemented in the trusted launcher,
+    not imported from the release under inspection. It does not seal the tree:
+    root-controlled custody must remain intact until the service exits.
+    """
+    root = root.absolute()
+    paths = [root, *root.parents] if check_ancestors else [root]
+    for path in paths:
+        info = path.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or
+                info.st_uid != owner_uid or info.st_gid != owner_gid or
+                info.st_mode & 0o6022):
+            raise RuntimeError("Trusted executable ancestor is unsafe")
+    for directory, dirs, files in os.walk(root, topdown=True, followlinks=False):
+        for name in [*dirs, *files]:
+            path = Path(directory) / name
+            info = path.lstat()
+            if (not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)) or
+                    info.st_uid != owner_uid or info.st_gid != owner_gid or
+                    info.st_mode & 0o6022 or
+                    (stat.S_ISREG(info.st_mode) and info.st_nlink != 1)):
+                raise RuntimeError("Trusted executable tree contains unsafe entries")
+        # os.walk does not follow directory symlinks, but they must be rejected.
+    return True
+
+
 def fixed_release():
     check_root_path(RELEASE_BASE)
     link = RELEASE_CURRENT.lstat()
@@ -50,7 +78,8 @@ def fixed_release():
     target = RELEASE_CURRENT.resolve(strict=True)
     if target.parent != RELEASE_BASE or not re.fullmatch(r"[0-9a-f]{40}", target.name):
         raise RuntimeError("Approved release selector is unexpected")
-    check_root_path(target)
+    audit_trusted_tree(target)
+    audit_trusted_tree(NODE.parent.parent)
     # No dynamic caller-specified paths, and no trailing shell arguments.
     gate = target / "APPROVED-RELEASE"
     check_root_path(gate, kind="file")
@@ -89,10 +118,13 @@ def preflight():
         if not os.isatty(tty.fileno()):
             raise RuntimeError("Private terminal unavailable")
     check_root_path(CONTROL_INHIBIT, kind="file", exact_mode=0o600)
-    bot = pwd.getpwnam(BOT_USER)
+    try:
+        bot = pwd.getpwnam(BOT_USER)
+    except KeyError as exc:
+        raise RuntimeError("Authentication account unavailable") from exc
     check_private_dir(BOT_AUTH, bot.pw_uid)
     check_private_dir(BOT_CACHE, bot.pw_uid)
-    if any(BOT_CACHE.iterdir()) or (BOT_AUTH / ".provision.lock").exists():
+    if any(BOT_CACHE.iterdir()) or os.path.lexists(BOT_AUTH / ".provision.lock"):
         raise RuntimeError("Authentication state needs private recovery")
     observe = unit_status(OBSERVE_UNIT)
     if observe["ActiveState"] != "inactive" or observe["MainPID"] != "0":
@@ -157,6 +189,9 @@ def main(argv):
         if result.returncode:
             raise RuntimeError("Attended authentication did not complete")
         return 0
+    except KeyboardInterrupt:
+        print("SaraCraft authentication interrupted; keep inhibit active.", file=sys.stderr)
+        return 130
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired):
         print("SaraCraft authentication launcher failed; keep inhibit active.", file=sys.stderr)
         return 1
