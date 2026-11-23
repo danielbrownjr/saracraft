@@ -29,12 +29,21 @@ invoked manually only after an independently authorized and documented root
 installation/promotion, from a dedicated unattended-by-Codex TTY using a
 password-requiring sudo prompt. It accepts **no arguments**.
 
-The launcher validates root execution under the named human operator, both
+The launcher checks root execution and a named `SUDO_USER` as an advisory misuse
+guard, not as proof of human identity: a root caller can forge that variable.
+Neither `isatty` nor `/dev/tty` proves that Codex or another tool cannot
+control or record the PTY. The operative boundary is separately verified
+interactive sudo authentication in a genuinely human-controlled, non-recorded
+terminal. The launcher also checks both
 terminal file descriptors, the root-owned 0600 persistent emergency inhibit,
 empty 0700 bot-owned auth/cache directories and absent provision lock,
 inactive observation service, absent active auth transient unit, and a
 root-controlled, 40-hex-SHA-named release selected by `current` with the
-`APPROVED-RELEASE` marker. It does **not** clear inhibit.
+`APPROVED-RELEASE` marker. The entire resolved release tree, Node runtime tree,
+and their filesystem ancestors must pass root ownership, non-writability,
+no-special-file, no-symlink and hardlink checks. These path checks require
+continued root-controlled custody and do not eliminate a race against an
+already root-capable attacker. It does **not** clear inhibit.
 
 The fixed `systemd-run --system --pty --wait --collect` invocation runs a
 separate, one-shot `saracraft-auth-once.service` with `User/Group=saracraft-bot`,
@@ -44,7 +53,9 @@ binary and the approved `provision-auth.js` entrypoint. Environment is cleared
 at the second execution boundary with `/usr/bin/env -i`; inherited environment
 for `systemd-run` itself is also restricted. No `npm run`, raw stdout/stderr
 journal target, or gameplay launcher path is used. The PTY is inherently
-operator-visible and may be captured by the surrounding terminal: host
+operator-visible and may be captured by the surrounding terminal, sudo I/O
+logging, terminal audit or session recording. Verify sudo `log_input`,
+`log_output`, `iolog`, and PAM TTY audit policy before credential use; host
 acceptance must verify `systemd-run --pty` routing with a synthetic canary.
 
 The launcher exit state is **not** proof of secret isolation, successful
@@ -91,8 +102,16 @@ session, may perform recovery. In particular:
    success. Require identity provenance from independently sanitized evidence.
 4. **Private reset only by explicit authorization.** After the operator has
    decided to discard credentials, quarantine the entire fixed cache directory
-   on the same protected filesystem under a root-only, mode-0700 name with no
-   symlink-following or copying. Recreate an empty bot-owned 0700 cache directory;
+   into a pre-created, root-owned mode-0700 parent under
+   `/var/lib/saracraft-control/`, strictly outside `/var/lib/saracraft-bot`
+   and every directory exposed through the bot service's bind mounts.
+   Verify the source and destination parent are on the same device (`st_dev`)
+   and use a single no-follow, same-filesystem rename operation, never a
+   copy/delete fallback. A rename does **not** change ownership: before any
+   future bot service is permitted, recursively transfer ownership of the
+   quarantined directory and its contents to root without following symlinks,
+   while preserving restrictive modes. If ownership conversion or parent
+   custody cannot be verified, STOP with the inhibit still active. Recreate an empty bot-owned 0700 cache directory;
    remove only the positively validated fixed lock, and fsync its parent
    directory. Any unexpected names, hardlinks, ownership, mode, process state or
    operation failure are a **STOP**. Secure disposal of the quarantine, if
