@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EventEmitter } from 'node:events'
+import { generateKeyPairSync, sign } from 'node:crypto'
+import { createRequire } from 'node:module'
 import { Vec3 } from 'vec3'
 import { commandEnvelope, commandReply, enableMovement, isWater } from './movement.js'
 const uuid = '00000000-0000-4000-8000-000000000001'
@@ -142,6 +144,82 @@ test('chat verified field, encryption, roster and replay index all gate actuatio
   assert.equal(f.controller.activeTaskId, null)
   await f.close()
 })
+test('command diagnostics identify each gate without carrying packet fields', async () => {
+  const f = fixture()
+  try {
+    f.packet('ordinary chat', 1)
+    assert.equal(f.reports.length, 0)
+    f.packet('!sara other', undefined, { globalIndex: undefined, verified: false, sender: 'other',
+      raw: 'private', signature: 'private' })
+    await flush()
+    const checks = f.reports.find(x => x.event === 'movement_ignored')
+    assert.deepEqual(checks, { event: 'movement_ignored', signatureVerified: false,
+      encryptedTransport: true, commanderMatched: false, commanderInRoster: true, indexPresent: false,
+      indexValid: false, indexFresh: false, commandParsed: false })
+    f.packet('!sara follow', -1)
+    await flush()
+    assert.equal(f.reports.at(-1).indexPresent, true)
+    assert.equal(f.reports.at(-1).indexValid, false)
+    f.bot._client.cipher = null
+    f.bot.players = {}
+    f.packet('!sara follow', 1)
+    await flush()
+    assert.equal(f.reports.at(-1).encryptedTransport, false)
+    assert.equal(f.reports.at(-1).commanderInRoster, false)
+  } finally { await f.close() }
+})
+
+test('pinned protocol produces the signed playerChat shape, including first index zero', async () => {
+  const require = createRequire(import.meta.url)
+  const installChat = require('minecraft-protocol/src/client/chat')
+  const { concat } = require('minecraft-protocol/src/transforms/binaryStream')
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const session = '00000000-0000-4000-8000-000000000002'
+  const keyBytes = publicKey.export({ format: 'der', type: 'spki' })
+  const f = fixture()
+  const client = f.bot._client
+  client.version = '1.21.11'
+  client.write = () => {}
+  installChat(client, {})
+  const key = () => client.emit('player_info', { data: [{ uuid, chatSession: {
+    uuid: session, publicKey: { keyBytes }
+  } }] })
+  function wire(plainMessage, globalIndex, index, { future = false, decorated = false } = {}) {
+    const timestamp = BigInt(Date.now() + (future ? 5000 : -1000))
+    const body = concat('i32', 1, 'UUID', uuid, 'UUID', session, 'i32', index, 'i64', 0n,
+      'i64', timestamp / 1000n, 'i32', Buffer.byteLength(plainMessage), 'pstring', plainMessage, 'i32', 0)
+    client.emit('player_chat', { senderUuid: uuid, globalIndex, index, plainMessage, timestamp, salt: 0n,
+      signature: sign('RSA-SHA256', body, privateKey), previousMessages: [],
+      unsignedChatContent: decorated ? { type: 'string', value: plainMessage } : undefined })
+  }
+  try {
+    wire('!sara follow', 0, 0)
+    await flush()
+    assert.equal(f.reports.at(-1).chatSessionKnown, false)
+    assert.equal(f.reports.at(-1).signaturePresent, true)
+    key()
+    wire('!sara follow', 0, 0)
+    await flush()
+    assert.ok(f.controller.activeTaskId)
+    wire('!sara stop', 0, 1)
+    await flush()
+    assert.ok(f.controller.activeTaskId)
+    assert.equal(f.reports.at(-1).signatureVerified, true)
+    assert.equal(f.reports.at(-1).indexFresh, false)
+    wire('!sara stop', 1, 2, { future: true })
+    await flush()
+    assert.equal(f.reports.at(-1).timestampAhead, true)
+    assert.equal(f.reports.at(-1).signatureVerified, false)
+    wire('!sara stop', 1, 3, { decorated: true })
+    await flush()
+    assert.equal(f.reports.at(-1).unsignedDecoration, true)
+    assert.equal(f.reports.at(-1).signatureVerified, false)
+    wire('!sara stop', 1, 4)
+    await flush()
+    assert.equal(f.controller.activeTaskId, null)
+  } finally { await f.close() }
+})
+
 test('rapid replacements let only the latest accepted command resume', async () => {
   const f = fixture(); f.packet('!sara follow', 1); await flush()
   f.packet('!sara come', 2); f.packet('!sara follow', 3); await flush()

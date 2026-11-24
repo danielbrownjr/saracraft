@@ -250,16 +250,54 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   }
   let lastChatIndex = -1
   let commandSequence = 0
+  let wireChat
+  const isCommandCandidate = text => typeof text === 'string' && /^\s*!sara(?:\s|$)/i.test(text)
+  function inspectPlayerChat(packet) {
+    wireChat = undefined
+    if (!isCommandCandidate(packet.plainMessage)) return
+    // minecraft-protocol emits playerChat synchronously from player_chat.
+    // Retain only booleans and correlation fields until that event is consumed.
+    const timestamp = typeof packet.timestamp === 'bigint' ? packet.timestamp : 0n
+    const age = BigInt(Date.now()) - timestamp
+    wireChat = {
+      sender: packet.senderUuid, index: packet.globalIndex,
+      flags: {
+        wireObserved: true,
+        signaturePresent: Boolean(packet.signature),
+        unsignedDecoration: Boolean(packet.unsignedChatContent),
+        chatSessionKnown: Boolean(bot._client._players?.[packet.senderUuid]?.sessionUuid),
+        timestampAhead: timestamp > 0n && age < 0n,
+        timestampExpired: timestamp > 0n && age > 420_000n,
+        timestampPresent: timestamp > 0n
+      }
+    }
+  }
   async function playerChat(packet) {
-    if (normalizeUuid(packet.sender) !== normalizeUuid(commanderUuid) ||
-        !movementCommands.has(parseCommand(packet.plainMessage)?.kind)) return
-    const rosterMatch = Object.values(bot.players ?? {}).some(p => normalizeUuid(p.uuid) === normalizeUuid(commanderUuid))
-    const fresh = Number.isSafeInteger(packet.globalIndex) && packet.globalIndex > lastChatIndex
+    const observed = wireChat
+    wireChat = undefined
+    if (!isCommandCandidate(packet?.plainMessage)) return
+    const command = parseCommand(packet.plainMessage)
+    const index = packet.globalIndex
+    const indexValid = Number.isSafeInteger(index) && index >= 0
+    const checks = {
+      signatureVerified: packet.verified === true,
+      encryptedTransport: Boolean(bot._client.cipher),
+      commanderMatched: normalizeUuid(packet.sender) === normalizeUuid(commanderUuid),
+      commanderInRoster: Object.values(bot.players ?? {}).some(p => normalizeUuid(p.uuid) === normalizeUuid(commanderUuid)),
+      indexPresent: index !== undefined && index !== null,
+      indexValid,
+      indexFresh: indexValid && index > lastChatIndex,
+      commandParsed: movementCommands.has(command?.kind)
+    }
     const envelope = commandEnvelope({ sender: packet.sender, plainMessage: packet.plainMessage,
-      authenticated: Boolean(packet.verified === true && bot._client.cipher && rosterMatch && fresh) }, commanderUuid)
-    if (!envelope) { report('movement_ignored', { reason: 'player_identity_or_replay' }); return }
-    lastChatIndex = packet.globalIndex
-    const { kind } = parseCommand(envelope.text)
+      authenticated: Object.values(checks).every(Boolean) }, commanderUuid)
+    if (!envelope) {
+      const flags = observed && observed.sender === packet.sender && observed.index === index ? observed.flags : {}
+      report('movement_ignored', { ...checks, ...flags })
+      return
+    }
+    lastChatIndex = index
+    const { kind } = command
     const sequence = ++commandSequence
     if (kind !== 'stop' && controller.activeTaskId !== null) {
       const previous = await controller.stop()
@@ -293,6 +331,8 @@ function installMovement(bot, commanderUuid, report, options = {}) {
     if (disposed) return
     disposed = true
     bot._client.removeListener('playerChat', onPlayerChat)
+    bot._client.removeListener('player_chat', inspectPlayerChat)
+    wireChat = undefined
     for (const name of ['blockUpdate', 'entityMoved', 'entitySpawn', 'entityGone', 'entityUpdate', 'chunkColumnUnload', 'chunkColumnLoad']) bot.removeListener(name, stateChanged)
     bot.removeListener('path_update', pathUpdate); bot.removeListener('path_reset', pathReset)
     bot.removeListener('physicsTick', tick); bot.removeListener('goal_reached', goalReached)
@@ -307,6 +347,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   bot.prependListener('physicsTick', tick); bot.on('goal_reached', goalReached)
   for (const name of ['blockUpdate', 'entityMoved', 'entitySpawn', 'entityGone', 'entityUpdate', 'chunkColumnUnload', 'chunkColumnLoad']) bot.on(name, stateChanged)
   const onPlayerChat = packet => { void playerChat(packet).catch(() => shutdown()) }
+  bot._client.prependListener('player_chat', inspectPlayerChat)
   bot._client.on('playerChat', onPlayerChat)
   bot.once('end', end)
   if (policy === 'supervised-dry') {
