@@ -1,7 +1,7 @@
 # SaraCraft authentication packaging and credential-free acceptance
 
-**Status:** Candidate procedure and source-side validation only. No host acceptance or credential-bearing use is claimed.
-**Stacked base:** PR #10 at `f21b35933e49e7b882cb62f0a056160681ca6375`.
+**Status (2026-11-24):** Source PR #11 merged. Credential-free synthetic host acceptance passed for exact source `407a1d8` in the 2026-11-23 acceptance report; this is not a trusted release promotion or credential-bearing acceptance. Actual host status after source merges has not been rechecked.
+**Historical stacked base:** PR #10 at `f21b35933e49e7b882cb62f0a056160681ca6375`.
 **Safety:** Keep `/var/lib/saracraft-control/inhibit` present. Do not launch `provision-auth.js`, `main.js`, or any Minecraft connection during packaging or synthetic acceptance.
 
 ## O1: deterministic, symlink-free packaging
@@ -56,9 +56,12 @@ mode 0600, and file/parent fsync **only after** verified cache commit,
 private success notification and exclusive lock release. The launcher
 preflight rejects an existing receipt. After `systemd-run` returns zero,
 the launcher requires the receipt to be a single-link regular file owned
-by the bot, size zero and mode 0600; nonempty cache entries must have
-the expected fixed filename patterns, bot owner, mode 0600 and single
-links; no provision lock may remain; and the authentication unit must
+by the bot user and group, size zero and mode 0600. The cache must contain
+all three files `c0e6c0_live-cache.json`, `c0e6c0_xbl-cache.json` and
+`c0e6c0_mca-cache.json`, and no additional entries. Each must be a nonempty
+regular file with bot user and group ownership, mode 0600 and a single link.
+Any missing, extra, empty or otherwise invalid entry fails closed. No provision
+lock may remain, and the authentication unit must
 report inactive with PID 0. All inspections are metadata-only; never
 print or read credential bytes. Any failure leaves the inhibit active
 and reports generic failure.

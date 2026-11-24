@@ -1,8 +1,6 @@
-# SaraCraft authentication-only launcher and private recovery (SOURCE CANDIDATE)
+# SaraCraft authentication-only launcher and private recovery (reviewed source; deployment separately gated)
 
-**Status:** Source only, not installed or executed on Hephaestus. The accepted
-PR #9 provisioner is stacked on PR #8. This document and
-`ops/auth/saracraft-auth-launch` are candidates for a separate security review.
+**Status (2026-11-24):** Source merged to `main`, not known to be installed or executed as the real auth launcher on Hephaestus. Credential-free synthetic host acceptance passed at `407a1d8`; trusted promotion and real sign-in are separately gated. The provisioner and launcher were merged in Wave 1; the launcher source was reviewed at `f21b359` and completion hardening at `407a1d8`.
 No host changes, identity provisioning, Microsoft sign-in, Minecraft connection,
 release promotion or emergency-inhibit clearance are authorized by this PR.
 
@@ -36,7 +34,8 @@ control or record the PTY. The operative boundary is separately verified
 interactive sudo authentication in a genuinely human-controlled, non-recorded
 terminal. The launcher also checks both
 terminal file descriptors, the root-owned 0600 persistent emergency inhibit,
-empty 0700 bot-owned auth/cache directories, absent provision lock and absent\ncompletion receipt,
+empty 0700 bot-owned auth/cache directories, absent provision lock and absent
+completion receipt,
 inactive observation service, absent active auth transient unit, and a
 root-controlled, 40-hex-SHA-named release selected by `current` with the
 `APPROVED-RELEASE` marker. The entire resolved release tree, Node runtime tree,
@@ -74,7 +73,7 @@ commit with final ownership, hash into an out-of-tree trusted manifest from
 root-owned staging, copy without hardlinks, strictly verify the promoted tree,
 independently validate Node, policy and the launcher, and confirm that `current`
 points to the exact approved SHA. Rebuild the manifest before copying, not
-from an untrusted installed tree. No PR merge or deployment is implied.
+from an untrusted installed tree. Source merge is complete; no deployment is implied.
 
 ## Private recovery, no secrets in logs
 
@@ -147,7 +146,8 @@ session, may perform recovery. In particular:
    operation failure are a **STOP**. Secure disposal of the quarantine, if
    required, is a separate action and must not be improvised via glob or
    `rm -rf`.
-5. **Revalidate.** Confirm the new cache is empty, the lock is absent,\n   and the completion receipt is absent
+5. **Revalidate.** Confirm the new cache is empty, the lock is absent,
+   and the completion receipt is absent
    through metadata alone. Preserve the emergency inhibit and leave both
    systemd units inactive. Report only boolean outcomes and fixed error
    categories. No automatic retry, Microsoft sign-in or Minecraft startup.
@@ -171,5 +171,5 @@ would be a separately reviewed and approved privileged operation.
   before any live Minecraft observation.
 - Observation inhibit remains active through **all** auth-only procedures.
 
-**STOP:** source tests and draft PR only. No installation, authentication,
-Minecraft connections, privileged changes, merges or releases.
+**STOP:** trusted promotion, installation, authentication, Minecraft connections,
+privileged changes and releases require separate explicit authorization.
