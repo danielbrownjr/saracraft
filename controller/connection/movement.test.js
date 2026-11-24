@@ -3,6 +3,7 @@ import test from 'node:test'
 import { EventEmitter } from 'node:events'
 import { generateKeyPairSync, sign } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { observeChatWire } from './chat-admission.js'
 import { Vec3 } from 'vec3'
 import { commandEnvelope, commandReply, enableMovement, isWater } from './movement.js'
 const uuid = '00000000-0000-4000-8000-000000000001'
@@ -316,8 +317,8 @@ test('Paper wire cache references verify without weakening signed STOP or replay
   }
   const verification = []
   uncorrected.on('playerChat', event => verification.push(event.verified === true))
-  function send(plainMessage, index, refs, acknowledged, { ahead = false, tamper = false } = {}) {
-    const timestamp = BigInt(Date.now() + (ahead ? 5000 : -1000))
+  function send(plainMessage, index, refs, acknowledged, { ahead = false, tamper = false, stale = false } = {}) {
+    const timestamp = BigInt(Date.now() + (ahead ? 5000 : stale ? -430000 : -1000))
     const body = concat('i32', 1, 'UUID', uuid, 'UUID', session, 'i32', index, 'i64', 0n,
       'i64', timestamp / 1000n, 'i32', Buffer.byteLength(plainMessage), 'pstring', plainMessage,
       'i32', acknowledged.length, 'buffer', Buffer.concat(acknowledged))
@@ -350,16 +351,43 @@ test('Paper wire cache references verify without weakening signed STOP or replay
     assert.equal(f.controller.activeTaskId, null)
     assert.equal(f.reports.at(-1).timestampPresent, true)
     assert.equal(f.reports.at(-1).timestampAhead, true)
-    const third = send('ordinary signed message', 4, [], [])
-    send('!sara follow', 5, [1], [third], { tamper: true })
+    assert.equal(f.reports.at(-1).signatureValidWithoutTime, true)
+    assert.equal(f.reports.at(-1).chainAllowsIndex, true)
+    assert.ok(f.reports.at(-1).signedDeltaAfterMs >= 4000)
+    assert.ok(f.reports.at(-1).signedDeltaBeforeMs >= f.reports.at(-1).signedDeltaAfterMs)
+    send('!sara follow', 4, [], [], { stale: true })
+    await flush()
+    assert.equal(f.controller.activeTaskId, null)
+    assert.equal(f.reports.at(-1).timestampExpired, true)
+    assert.equal(f.reports.at(-1).signatureValidWithoutTime, true)
+    assert.ok(f.reports.at(-1).signedDeltaBeforeMs <= -420000)
+    const third = send('ordinary signed message', 5, [], [])
+    send('!sara follow', 6, [1], [third], { tamper: true })
     await flush()
     assert.equal(f.controller.activeTaskId, null)
     assert.equal(f.reports.at(-1).packedSignaturesResolved, true)
     assert.equal(f.reports.at(-1).signatureVerified, false)
-    send('!sara follow', 6, [128], [])
+    assert.equal(f.reports.at(-1).signatureValidWithoutTime, false)
+    send('!sara follow', 7, [128], [])
     await flush()
     assert.equal(f.controller.activeTaskId, null)
     assert.equal(f.reports.at(-1).packedReferences, true)
     assert.equal(f.reports.at(-1).packedSignaturesResolved, false)
   } finally { await f.close() }
+})
+
+test('malformed timestamp and missing session never yield independent signature proof', () => {
+  const client = new EventEmitter()
+  const wire = observeChatWire(client)
+  try {
+    client.emit('player_chat', {
+      senderUuid: uuid, globalIndex: 0, plainMessage: '!sara stop', timestamp: 'invalid', previousMessages: []
+    })
+    const flags = wire.take({ sender: uuid, globalIndex: 0 })
+    assert.equal(flags.timestampPresent, false)
+    assert.equal(flags.signedDeltaBeforeMs, null)
+    assert.equal(flags.signedDeltaAfterMs, null)
+    assert.equal(flags.signatureValidWithoutTime, false)
+    assert.equal(flags.chainAllowsIndex, false)
+  } finally { wire.dispose() }
 })

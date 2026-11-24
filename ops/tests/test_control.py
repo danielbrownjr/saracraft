@@ -107,13 +107,19 @@ class BackendTests(unittest.TestCase):
         core = dict.fromkeys(priv.CHAT_CHECKS, False)
         wire = dict.fromkeys(priv.CHAT_WIRE_CHECKS, True)
         packet = dict.fromkeys(priv.CHAT_PACKET_CHECKS, True)
-        for checks in (core, {**core, **wire}, {**core, **wire, **packet}):
+        proof = {"signatureValidWithoutTime": True, "chainAllowsIndex": True,
+                 "signedDeltaBeforeMs": 12, "signedDeltaAfterMs": -2}
+        current = {**core, **wire, **packet, **proof}
+        for checks in (core, {**core, **wire}, {**core, **wire, **packet}, current):
             safe = priv.sanitize({**base, **checks})
             self.assertEqual(safe, {"time": base["time"], "event": base["event"], **checks})
         for extra in ({"signatureVerified": 1}, {"signature": "secret"},
                       {"uuid": "secret"}, {"chatSessionKnown": True}, {"packedReferences": True}):
             self.assertIsNone(priv.sanitize({**base, **core, **extra}))
         self.assertIsNone(priv.sanitize({**base, "signatureVerified": False}))
+        for value in (True, "12", -1_000_001, 1_000_001):
+            self.assertIsNone(priv.sanitize({**base, **current, "signedDeltaBeforeMs": value}))
+        self.assertIsNone(priv.sanitize({**base, **current, "signature": "secret"}))
 
     def test_logs_drop_unsanitized_raw_lines(self):
         run = "00000000-0000-4000-8000-000000000001"
