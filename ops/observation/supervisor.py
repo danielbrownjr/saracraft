@@ -35,6 +35,15 @@ class State:
         return self.active in TERMINAL and self.pid == 0 and not self.group
 
 
+def normalize_invocation(value):
+    value = value.strip()
+    if not value or value == "0" * 32:
+        return ""
+    if len(value) != 32 or any(c not in "0123456789abcdefABCDEF" for c in value):
+        raise ValueError("Invalid systemd invocation identity")
+    return value.lower()
+
+
 class RestrictedOperations:
     @staticmethod
     def _read(*command, timeout=2):
@@ -53,7 +62,8 @@ class RestrictedOperations:
         return State(props["ActiveState"], int(props["MainPID"]), props["ControlGroup"],
                      int(props["ExecMainStartTimestampMonotonic"]) / 1_000_000,
                      props["Result"], int(props["ExecMainStatus"]),
-                     status["emergency_inhibit"], int(props["NRestarts"]), props["InvocationID"])
+                     status["emergency_inhibit"], int(props["NRestarts"]),
+                     normalize_invocation(props["InvocationID"]))
 
     def logs(self):
         return self._read(CONTROL, "logs").splitlines()
