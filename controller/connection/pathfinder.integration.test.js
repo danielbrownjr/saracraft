@@ -12,7 +12,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve))
 
 // Actual installed pathfinder, block registry and physics against a finite local
 // world fixture. This never constructs a Mineflayer client or opens a socket.
-function fixture() {
+function fixture({ policy = 'strict' } = {}) {
   const bot = new EventEmitter()
   bot.version = '1.21.11'
   bot.registry = minecraftData(bot.version)
@@ -33,7 +33,10 @@ function fixture() {
   // Match Mineflayer's real indirect implementation, rather than replacing the
   // map directly and hiding actuation-wrapper cancellation defects.
   bot.clearControlStates = () => { for (const key of Object.keys(bot.controlState)) bot.setControlState(key, false) }
-  bot.look = () => Promise.resolve()
+  bot.look = (yaw, pitch) => {
+    Object.assign(bot.entity, { yaw, pitch })
+    return Promise.resolve()
+  }
   bot.chat = () => {}
   let water = false
   bot.blockAt = p => {
@@ -47,10 +50,10 @@ function fixture() {
   bot.physics = physicsPackage.Physics(bot.registry, { getBlock: p => bot.blockAt(p) })
   bot.loadPlugin = plugin => plugin(bot)
   const reports = []
-  const halt = enableMovement(bot, commander, (event, details) => reports.push({ event, ...details }), { now: () => 10000, searchTimeoutMs: 10_000, searchTickTimeoutMs: 1_000 })
+  const halt = enableMovement(bot, commander, (event, details) => reports.push({ event, ...details }), { policy, now: () => 10000, searchTimeoutMs: 10_000, searchTickTimeoutMs: 1_000 })
   const airKey = bot.registry.entitiesByName.player.metadataKeys.indexOf('air_supply')
-  bot._client.emit('entity_metadata', { entityId: 1, metadata: [{ key: airKey, value: 300 }] })
-  return { bot, halt, controls, reports, water: () => { water = true } }
+  if (policy === 'strict') bot._client.emit('entity_metadata', { entityId: 1, metadata: [{ key: airKey, value: 300 }] })
+  return { bot, halt, controls, reports, target, water: () => { water = true } }
 }
 
 test('real pathfinder controls are admitted on dry ground, then synchronously cleared on water trip', async () => {
@@ -78,5 +81,58 @@ test('real pathfinder controls are admitted on dry ground, then synchronously cl
     assert.equal(final.movementStopped, false)
     f.bot.setControlState('forward', true)
     assert.equal(f.bot.controlState.forward, false)
+  } finally { f.halt(); f.halt.dispose() }
+})
+
+test('supervised dry follow, verified commander STOP, come and follow again with real pathfinder', async () => {
+  const f = fixture({ policy: 'supervised-dry' })
+  const packet = (word, globalIndex, extra = {}) => f.bot._client.emit('playerChat', {
+    sender: commander, plainMessage: `!sara ${word}`, globalIndex, verified: true, ...extra
+  })
+  const advance = async (ticks) => {
+    for (let i = 0; i < ticks; i++) {
+      f.bot.emit('physicsTick')
+      f.bot.physics.simulatePlayer(new physicsPackage.PlayerState(f.bot, f.bot.controlState),
+        { getBlock: p => f.bot.blockAt(p) }).apply(f.bot)
+      await flush()
+    }
+  }
+  try {
+    packet('follow', 1, { verified: false })
+    await flush()
+    assert.equal(f.halt.controller.activeTaskId, null)
+    packet('follow', 1)
+    await flush()
+    assert.ok(f.bot.pathfinder.goal)
+    const start = f.bot.entity.position.clone()
+    await advance(15)
+    assert.ok(f.bot.entity.position.distanceTo(start) > 1)
+    f.target.position = new Vec3(11.5, 64, 0.5)
+    await advance(10)
+    assert.ok(f.bot.pathfinder.goal, 'moving commander must remain a valid dynamic goal')
+    packet('stop', 2)
+    await flush()
+    assert.equal(f.bot.pathfinder.goal, null)
+    assert.ok(Object.values(f.bot.controlState).every(value => value === false))
+    await advance(12)
+    const stopped = f.bot.entity.position.clone()
+    await advance(5)
+    assert.ok(f.bot.entity.position.distanceTo(stopped) < 0.05)
+    packet('come', 3)
+    await flush()
+    await advance(60)
+    assert.ok(f.bot.entity.position.distanceTo(f.target.position) <= 2.5)
+    assert.equal(f.halt.controller.activeTaskId, null)
+    f.target.position = new Vec3(16.5, 64, 0.5)
+    packet('follow', 4)
+    await flush()
+    const followAgain = f.bot.entity.position.clone()
+    await advance(15)
+    assert.ok(f.bot.entity.position.distanceTo(followAgain) > 1)
+    f.bot.emit('respawn')
+    assert.equal(f.bot.pathfinder.goal, null)
+    assert.ok(Object.values(f.bot.controlState).every(value => value === false))
+    assert.deepEqual(f.reports.filter(row => row.event === 'movement_command' && row.accepted)
+      .map(row => row.kind), ['follow', 'stop', 'comeHere', 'follow'])
   } finally { f.halt(); f.halt.dispose() }
 })
