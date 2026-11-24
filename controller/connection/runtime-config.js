@@ -4,10 +4,11 @@ import { identity } from './connection.js'
 // Configuration is checked before authentication directories or credentials are read.
 // The source-recovery placeholders are documentation, never runtime authority.
 export function runtimeOptions(args, env) {
-  if (args.length > 1 || args.some(arg => !['--walk', '--observe'].includes(arg))) {
+  if (args.length > 1 || args.some(arg => !['--walk', '--observe', '--walk-supervised'].includes(arg))) {
     throw new Error('Unsupported launcher arguments')
   }
-  const walk = args.includes('--walk')
+  const supervised = args.includes('--walk-supervised')
+  const walk = args.includes('--walk') || supervised
   const observe = args.includes('--observe')
   if (!walk) return { walk: false, observe, commanderUuid: null }
   const uuid = env.SARACRAFT_COMMANDER_UUID
@@ -15,5 +16,5 @@ export function runtimeOptions(args, env) {
       uuid.toLowerCase() === identity.uuid.toLowerCase()) {
     throw new Error('Movement requires an explicit non-placeholder commander UUID')
   }
-  return { walk: true, observe: false, commanderUuid: uuid.toLowerCase() }
+  return { walk: true, observe: false, commanderUuid: uuid.toLowerCase(), ...(supervised ? { policy: 'supervised-dry' } : {}) }
 }
