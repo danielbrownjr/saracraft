@@ -3,6 +3,7 @@
 // Invoking this utility later requires separate explicit host/auth authorization.
 import { isatty } from 'node:tty'
 import { openSync, writeSync, closeSync } from 'node:fs'
+import { recordCompletion } from './auth-completion.js'
 import { verifyPrivateCache, provisionAuthentication, acquireProvisionLock, releaseProvisionLock } from './auth-provisioner.js'
 
 process.umask(0o077)
@@ -61,8 +62,15 @@ async function main() {
     releaseProvisionLock()
   }
 }
+// The supervising systemd-run client's return code cannot attest to the
+// transient service's exit status. A zero-byte, private, exclusive receipt is
+// created only after verified cache commit, attended success notification, and
+// provision-lock release have all finished. No token or profile is written.
+// The privileged launcher validates receipt metadata, never its contents.
+
 try {
   await main()
+  recordCompletion()
 } catch {
   // Never stringify upstream errors, auth replies, names or token details.
   safeError(FATAL_MESSAGE)

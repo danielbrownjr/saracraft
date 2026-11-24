@@ -104,6 +104,10 @@ export function persistVerifiedCache(files, {
         close(fd)
       }
     }
+    // Durable directory entries are required before the completion receipt
+    // can become visible in /auth. File fsync alone is insufficient.
+    const dirFd = open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+    try { fsync(dirFd) } finally { close(dirFd) }
     return files.length
   } catch {
     for (const path of created.reverse()) {

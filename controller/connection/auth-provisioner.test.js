@@ -226,6 +226,58 @@ test('failed multi-file commit removes only newly created files', () => {
   }
 })
 
+test('verified cache fsyncs the containing directory before successful return', () => {
+  const root = mkdtempSync(join(tmpdir(), 'saracraft-cache-dir-sync-'))
+  try {
+    const staged = createStagedCache(identity.name)
+    staged.factory({ cacheName: 'live', username: identity.name })
+      .setCached({ token: { refresh_token: 'SYNTHETIC' } })
+    const files = staged.seal()
+    const synced = []
+    const opened = []
+    assert.equal(persistVerifiedCache(files, {
+      directory: root,
+      open(path, flags, mode) {
+        const fd = openSync(path, flags, mode)
+        opened.push({ path, fd })
+        return fd
+      },
+      fsync(fd) { synced.push(fd) }
+    }), 1)
+    const dir = opened.find(item => item.path === root)
+    const child = opened.find(item => item.path !== root)
+    assert.ok(dir && child)
+    assert.deepEqual(synced, [child.fd, dir.fd])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('cache directory fsync failure fails closed and removes newly created files', () => {
+  const root = mkdtempSync(join(tmpdir(), 'saracraft-cache-dir-failure-'))
+  try {
+    const staged = createStagedCache(identity.name)
+    staged.factory({ cacheName: 'live', username: identity.name })
+      .setCached({ token: { refresh_token: 'SYNTHETIC' } })
+    const files = staged.seal()
+    let directoryFd
+    assert.throws(() => persistVerifiedCache(files, {
+      directory: root,
+      open(path, flags, mode) {
+        const fd = openSync(path, flags, mode)
+        if (path === root) directoryFd = fd
+        return fd
+      },
+      fsync(fd) {
+        if (fd === directoryFd) throw new Error('synthetic fsync failure')
+      }
+    }), /commit failed/)
+    assert.deepEqual(readdirSync(root), [])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('failed authentication never reaches persistence', async () => {
   class PartialAuth {
     constructor(name, factory) { this.live = factory({ cacheName: 'live', username: name }) }
