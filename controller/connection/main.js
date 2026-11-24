@@ -1,10 +1,12 @@
-import { appendFileSync, closeSync, lstatSync, openSync, writeSync } from 'node:fs'
+import { appendFileSync, lstatSync } from 'node:fs'
 import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import mineflayer from 'mineflayer'
 import prismarineAuth from 'prismarine-auth'
 // Import movement dynamically only in --walk. --observe cannot load pathfinder.
 import { runtimeOptions } from './runtime-config.js'
+import { privateDeviceCode } from './device-authorization.js'
+import { observationTiming } from './observation-policy.js'
 import { classify, identity, target, verifiedProfile, verifyConnection } from './connection.js'
 
 process.umask(0o077)
@@ -20,27 +22,14 @@ function shutdown() {
 process.once('SIGINT', shutdown)
 process.once('SIGTERM', shutdown)
 const cache = '/auth/cache'
-const evidence = '/auth/verification.jsonl'
+// The only accepted service-specific override is a fixed, reviewable destination.
+const evidence = process.env.SARACRAFT_EVIDENCE_PATH === '/var/log/saracraft-bot/verification.jsonl'
+  ? '/var/log/saracraft-bot/verification.jsonl' : '/auth/verification.jsonl'
 
 function report(event, details = {}) {
   const line = JSON.stringify({ time: new Date().toISOString(), run, event, ...details }) + '\n'
   appendFileSync(evidence, line, { mode: 0o600, flag: constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW })
   process.stdout.write(line)
-}
-
-function privateDeviceCode({ verification_uri: uri, user_code: code }) {
-  const url = new URL(uri)
-  if (url.protocol !== 'https:' || !['www.microsoft.com', 'microsoft.com', 'login.live.com'].includes(url.hostname) ||
-      url.username || url.password || url.search || url.hash || !/^[A-Z0-9-]{4,16}$/i.test(code)) {
-    throw new Error('Invalid device-code response')
-  }
-  report('authorization_required')
-  const tty = openSync('/dev/tty', 'w')
-  try {
-    writeSync(tty, `\nOpen ${url.href} and enter ${code} using the Microsoft account for ${identity.name}.\n\n`)
-  } finally {
-    closeSync(tty)
-  }
 }
 
 async function main({ walk, observe, commanderUuid }) {
@@ -57,7 +46,7 @@ async function main({ walk, observe, commanderUuid }) {
     // Match minecraft-protocol's built-in Microsoft device-code flow.
     const auth = new Authflow(identity.name, cache, {
       authTitle: Titles.MinecraftNintendoSwitch, deviceType: 'Nintendo', flow: 'live'
-    }, privateDeviceCode)
+    }, challenge => privateDeviceCode(challenge, { report, name: identity.name }))
     credentials = await auth.getMinecraftJavaToken({ fetchProfile: true, fetchCertificates: walk })
     verifiedProfile(credentials)
     if (walk && !credentials.certificates?.profileKeys) {
@@ -65,7 +54,7 @@ async function main({ walk, observe, commanderUuid }) {
       return false
     }
   } catch (error) {
-    report('failed', { category: classify('auth', error) })
+    report('failed', { category: error?.message === 'AUTH_REQUIRED' ? 'AUTH_REQUIRED' : classify('auth', error) })
     return false
   }
   if (abort.signal.aborted) return false
@@ -82,7 +71,8 @@ async function main({ walk, observe, commanderUuid }) {
   } : report
   return verifyConnection({
     config: target, report: trialReport, signal: abort.signal,
-    stay: walk || observe, sessionMs: observe ? 180_000 : 480_000,
+    stay: walk || observe, sessionMs: observe ? observationTiming.sessionMs : 480_000,
+    maxAttempts: observe ? 1 : 2,
     onClosing: () => attachment?.dispose(),
     createBot: () => {
       const bot = mineflayer.createBot({
@@ -125,13 +115,22 @@ async function main({ walk, observe, commanderUuid }) {
 
 try {
   const options = runtimeOptions(process.argv.slice(2), process.env)
-  const authDeadline = setTimeout(() => {
-    report('failed', { category: 'authentication_timeout' })
-    process.exit(1)
-  }, (options.walk ? 17 : options.observe ? 9 : 8) * 60_000)
-  authDeadline.unref()
-  process.exitCode = (await main(options)) ? 0 : 1
-  clearTimeout(authDeadline)
+  // Observation's overall clock starts before authentication and bot creation.
+  // Backstop: a normal 150s observe run may exit cleanly before the 175s deadline.
+  // Imports run before this timer; the systemd 180s ceiling is independent.
+  const deadline = setTimeout(() => {
+    report('failed', { category: options.observe ? 'session_deadline' : 'authentication_timeout' })
+    abort.abort()
+    const forceExit = setTimeout(() => process.exit(1), options.observe ? 4_000 : 0)
+    forceExit.unref()
+    if (!options.observe) process.exit(1)
+  }, options.observe ? observationTiming.deadlineMs : (options.walk ? 17 : 8) * 60_000)
+  deadline.unref()
+  try {
+    process.exitCode = (await main(options)) && !abort.signal.aborted ? 0 : 1
+  } finally {
+    clearTimeout(deadline)
+  }
 } catch {
   process.stdout.write('SaraCraft verification failed during setup.\n')
   process.exitCode = 1

@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Unprivileged, fixed-command SaraCraft operator frontend. No shell expansion."""
+import subprocess
+import sys
+
+BACKEND = "/usr/local/libexec/saracraftctl-priv"
+VERBS = {
+    ("start", "observe"): "start-observe",
+    ("status",): "status",
+    ("stop",): "stop",
+    ("logs",): "logs",
+    ("estop",): "estop",
+}
+
+def main(argv):
+    operation = VERBS.get(tuple(argv))
+    if operation is None:
+        print("Usage: saracraftctl {start observe|status|stop|logs|estop}", file=sys.stderr)
+        return 2
+    result = subprocess.run(["/usr/bin/sudo", "-n", BACKEND, operation], check=False)
+    return result.returncode
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

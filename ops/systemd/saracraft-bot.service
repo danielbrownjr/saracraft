@@ -1,0 +1,45 @@
+# TEMPLATE ONLY. Do not install before release, account and privilege review.
+# Root-controlled /opt/saracraft/releases/current must be immutable to daniel and saracraft-bot.
+# /var/lib/saracraft-bot/auth and cache must be owned by saracraft-bot, mode 0700.
+# /var/lib/saracraft-control must be root-owned mode 0700.
+[Unit]
+Description=SaraCraft stationary observation (restricted, one shot)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/saracraft-control/inhibit
+ConditionPathExists=/opt/saracraft/releases/current/APPROVED-RELEASE
+
+[Service]
+Type=exec
+User=saracraft-bot
+Group=saracraft-bot
+WorkingDirectory=/opt/saracraft/releases/current/controller/connection
+ExecStart=/usr/bin/node /opt/saracraft/releases/current/controller/connection/main.js --observe
+Environment=SARACRAFT_EVIDENCE_PATH=/var/log/saracraft-bot/verification.jsonl
+Restart=no
+RuntimeMaxSec=180
+TimeoutStopSec=5
+KillMode=control-group
+SendSIGKILL=yes
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+LimitCORE=0
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+BindPaths=/var/lib/saracraft-bot/auth:/auth
+ReadWritePaths=/var/lib/saracraft-bot/auth /var/log/saracraft-bot
+InaccessiblePaths=/srv/saracraft /etc/saracraft /var/run/docker.sock
+
+[Install]
+# Intentionally no WantedBy: bot never starts automatically at boot.
