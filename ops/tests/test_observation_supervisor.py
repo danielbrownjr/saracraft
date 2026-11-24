@@ -39,14 +39,29 @@ class SimulatedOperations:
 
     def state(self):
         if self.tick < LAUNCH or self.failure == "never_started":
-            return State("inactive", 0, "", 80000, "success", 0, True)
+            return State("inactive", 0, "", 80000, "success", 0, True, 0, "")
         running = self.tick < self.finish and not self.stops
         if self.failure == "unconfirmed_stop" and self.stops:
             running = True
         started = 91000 + LAUNCH + (1 if self.failure == "restart" and self.tick >= 5 else 0)
+        invocation = "original"
+        restarts = 0
+        if self.failure == "terminal_restart" and not running:
+            started += 1
+        if self.failure == "hidden_restart" and not running:
+            started = 0
+            invocation = ""
+            restarts = 1
+        if self.failure == "new_invocation" and self.tick >= 5:
+            invocation = "different"
+        if self.failure == "cleared_timestamp" and not running:
+            started = 0
+            invocation = ""
+        if self.failure == "running_zero" and running and self.tick >= 5:
+            started = 0
         return State("active" if running else "inactive", int(running),
                      "/simulated" if running else "", started, "success", 0,
-                     bool(self.stops) and self.failure != "unconfirmed_stop")
+                     bool(self.stops) and self.failure != "unconfirmed_stop", restarts, invocation)
 
     def logs(self):
         if self.failure == "log_error" and 5 <= self.tick and not self.stops:
@@ -142,7 +157,7 @@ class SupervisorTests(unittest.TestCase):
 
     def test_rejects_uninhibited_initial_state_without_taking_control(self):
         ops = SimulatedOperations()
-        ops.state = lambda: State("inactive", 0, "", 0, "success", 0, False)
+        ops.state = lambda: State("inactive", 0, "", 0, "success", 0, False, 0, "")
         with self.assertRaises(ValueError):
             ops.run()
         self.assertEqual(ops.stops, 0)
@@ -150,7 +165,7 @@ class SupervisorTests(unittest.TestCase):
     def test_adapter_only_reads_state_logs_and_requests_existing_emergency_stop(self):
         with patch("subprocess.check_output", side_effect=[
             "ActiveState=inactive\nMainPID=0\nControlGroup=\n"
-            "ExecMainStartTimestampMonotonic=0\nResult=success\nExecMainStatus=0\n",
+            "ExecMainStartTimestampMonotonic=0\nResult=success\nExecMainStatus=0\nNRestarts=0\nInvocationID=\n",
             '{"emergency_inhibit":true}', "", "",
         ]) as execute:
             ops = RestrictedOperations()
@@ -208,3 +223,23 @@ class SupervisorTests(unittest.TestCase):
             ops.estop()
         self.assertEqual([call.kwargs["timeout"] for call in execute.call_args_list], [2, 15])
         self.assertTrue(all(call.kwargs["start_new_session"] for call in execute.call_args_list))
+
+    def test_normal_shutdown_with_cleared_timestamp(self):
+        result = SimulatedOperations(failure="cleared_timestamp").run()
+        self.assertEqual(result["outcome"], "normal")
+        self.assertEqual(result["acceptance"]["automated_acceptance"], "pass")
+        self.assertTrue(result["evidence"]["complete_overlap"])
+
+    def test_premature_shutdown_with_cleared_timestamp(self):
+        result = SimulatedOperations(finish=10, failure="cleared_timestamp").run()
+        self.assertEqual(result["reason"], "premature_disconnect")
+        self.assertEqual(result["acceptance"]["automated_acceptance"], "fail")
+
+    def test_restart_cannot_be_misclassified_as_terminal_reset(self):
+        for failure in ("restart", "terminal_restart", "hidden_restart",
+                        "new_invocation", "running_zero"):
+            with self.subTest(failure=failure):
+                result = SimulatedOperations(failure=failure).run()
+                self.assertEqual(result["reason"], "service_restarted")
+                self.assertEqual(result["acceptance"]["automated_acceptance"], "fail")
+                self.assertTrue(result["termination_verified"])
