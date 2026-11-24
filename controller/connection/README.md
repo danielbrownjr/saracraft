@@ -10,6 +10,58 @@ The direct Mineflayer transport does not load Mindcraft CE's agent and model sta
 - Mineflayer 4.39.0, mineflayer-pathfinder 2.4.5, prismarine-auth 3.1.1 and the locked minecraft-protocol 1.68.0.
 - From this directory, run `npm ci --ignore-scripts` and `npm test` using that Node runtime. The tests use mock events, never Microsoft authentication or an online Minecraft server.
 
+## Authentication-only provisioner (source candidate, NOT installed)
+
+`node provision-auth.js` is a separate entrypoint. Unlike `main.js`, it
+does not import Mineflayer, connect to Paper, create a Minecraft bot, or load
+movement/observation code. Its only purpose is to populate an **empty** private
+`/auth/cache` through the locked `prismarine-auth` Microsoft/Xbox/Minecraft
+authentication APIs, verify the **pinned** SaraCraft69 Java profile and UUID,
+and stop. The Minecraft *profile API* is not a Minecraft *game server*.
+Use Node 22.23.5 and pinned dependencies.
+
+The command requires an attended TTY on stdin/stdout, no arguments, a private
+existing `/auth` and `/auth/cache` owned by the running UID (0700), and an
+initially empty cache. An exclusive root-path-pinned `/auth/.provision.lock` prevents concurrent attended provisioning and triggers another empty-cache check after lock acquisition. A crash or hard timeout can leave this lock present, intentionally blocking retries until separately authorized, metadata-verified private recovery. It must run later under the dedicated bot identity with
+`/auth` privately bound to `/var/lib/saracraft-bot/auth`; the precise
+**auth-only launcher/sandbox and administrator-controlled entrypoint must be
+reviewed separately before installation or execution**. It uses a Microsoft
+device-code prompt written only to `/dev/tty`, suppresses library console
+output and never reports tokens or challenge codes to stdout, stderr or journal.
+The pinned `prismarine-auth@3.1.1` library uses a **memory-backed custom cache**
+throughout Microsoft/Xbox/Minecraft authentication. Only after the Java profile
+matches the fixed SaraCraft69 name and UUID does the provisioner persist the
+library-compatible JSON cache entries to the private directory with exclusive
+creation, mode 0600 and per-file fsync. A wrong-account, interrupted or
+unsuccessful sign-in **does not persist any authentication tokens**. A failed
+multi-file commit attempts rollback of files it created and reports only a
+generic failure. If cleanup or a hard interruption leaves partial files,
+the nonempty-cache gate and stale lock fail closed; investigate under a
+separately approved private recovery procedure, never via Codex chat.
+Node's uncaught-exception and unhandled-rejection handlers also emit only a
+generic failure, never upstream error text.
+
+When signing in later, use a dedicated browser profile or sign out of your
+personal Microsoft account first; explicitly confirm the account belongs to
+SaraCraft69. The future host launcher **must** use an absolute root-controlled
+Node binary, clean `env -i`-style environment, no `npm run`, and a truly private
+human-operated TTY outside Codex, tmux logging or shared terminal transcripts.
+The source guard rejects root execution and suspicious Node runtime options,
+but it cannot undo a preload that ran before JavaScript initialization.
+The auth library is intentionally never run against real services in source tests. The process has an 8-minute
+backstop. Interrupted or wrong-account attempts can leave partial or mismatched
+private cache state: do not retry automatically or expose its contents.
+Privileged cleanup/reset requires separate review and authorization.
+
+**Important:** Source implementation and offline tests do not authorize
+Microsoft authentication, credential migration, installation, movement,
+Minecraft connections or clearing the production emergency inhibit.
+The installed Stage 2 release remains at
+`50a2159fe46f279cda18ec8d5529b079466ed4a9` with its inhibit active.
+A new manifest and installed release require a separate promotion gate after
+independent security review. The live stationary observation still requires
+a separate attended go/no-go check and server-side disconnect verification.
+
 ## Device authorization and evidence
 
 Run the verifier from a private interactive terminal on Hephaestus. It requires an approved Docker operator to start the container with an attached TTY, Docker logging disabled, and a dedicated mount at `/auth`. Use the intended Microsoft account in the browser and enter the displayed code only at the Microsoft URL shown in the terminal. Keep the terminal open until the verifier exits. There are no credential environment variables. The target, Minecraft version and identity are fixed for this milestone.
