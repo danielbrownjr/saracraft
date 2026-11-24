@@ -189,3 +189,35 @@ test('passive diagnostics establish a fixed grounded baseline and report no coor
     assert.equal(bot.lastControl, undefined)
   } finally { observer.dispose() }
 })
+
+test('pinned physics settles a passive player on stable terrain', async () => {
+  const { createRequire } = await import('node:module')
+  const require = createRequire(import.meta.url)
+  const { Physics, PlayerState } = require('prismarine-physics')
+  const mcData = require('minecraft-data')('1.21.11')
+  const Block = require('prismarine-block')('1.21.11')
+  const world = { getBlock(position) {
+    const state = position.y < 0 ? mcData.blocksByName.stone.defaultState : mcData.blocksByName.air.defaultState
+    const block = Block.fromStateId(state, 0)
+    block.position = position.floored()
+    return block
+  } }
+  const physics = Physics(mcData, world)
+  const bot = {
+    version: '1.21.11', registry: mcData,
+    entity: { position: new Vec3(0.5, 1.5, 0.5), velocity: new Vec3(0, 0, 0),
+      onGround: false, isInWater: false, isInLava: false, isInWeb: false,
+      isCollidedHorizontally: false, isCollidedVertically: false, yaw: 0, pitch: 0,
+      effects: {} },
+    inventory: { slots: [] }, jumpTicks: 0, jumpQueued: false, fireworkRocketDuration: 0
+  }
+  const controls = { forward: false, back: false, left: false, right: false,
+    jump: false, sprint: false, sneak: false }
+  const state = new PlayerState(bot, controls)
+  for (let i = 0; i < 40; i++) physics.simulatePlayer(state, world)
+  assert.equal(state.onGround, true)
+  assert.ok(Math.abs(state.pos.y) < 1e-6)
+  const settled = state.pos.clone()
+  for (let i = 0; i < 40; i++) physics.simulatePlayer(state, world)
+  assert.ok(state.pos.distanceTo(settled) < 1e-6)
+})
