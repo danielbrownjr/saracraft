@@ -34,12 +34,16 @@ export function classify(source, error) {
 
 // The caller owns the shutdown signal. Only transport failures before spawn are retried.
 export async function verifyConnection({ createBot, config, report, signal, timeoutMs = 30_000,
-  heartbeatMs = 5_000, closeMs = 5_000, retryDelayMs = 2_000 }) {
+  heartbeatMs = 5_000, closeMs = 5_000, retryDelayMs = 2_000, stay = false, sessionMs = 480_000,
+  onClosing = () => {} }) {
   checkTarget(config)
+  if (typeof stay !== 'boolean' || !Number.isFinite(sessionMs) || sessionMs <= 0 || sessionMs > 480_000) {
+    throw new Error('Invalid bounded movement session')
+  }
   for (let attempt = 1; attempt <= 2; attempt++) {
     if (signal?.aborted) return false
     report('connecting', { attempt })
-    const outcome = await observe(createBot, report, signal, timeoutMs, heartbeatMs, closeMs)
+    const outcome = await observe(createBot, report, signal, timeoutMs, heartbeatMs, closeMs, stay, sessionMs, onClosing)
     if (outcome.ok) return true
     if (attempt === 2 || outcome.spawned || signal?.aborted ||
         !['network', 'disconnection'].includes(outcome.category) || !outcome.closed) return false
@@ -51,7 +55,7 @@ export async function verifyConnection({ createBot, config, report, signal, time
   return false
 }
 
-function observe(createBot, report, signal, timeoutMs, heartbeatMs, closeMs) {
+function observe(createBot, report, signal, timeoutMs, heartbeatMs, closeMs, stay, sessionMs, onClosing) {
   return new Promise(resolve => {
     let bot
     try {
@@ -68,13 +72,32 @@ function observe(createBot, report, signal, timeoutMs, heartbeatMs, closeMs) {
     let outcome
     let closeTimer
     let settled = false
+    let sessionTimer
+    let ready = false
     const timeout = setTimeout(() => finish('network'), timeoutMs)
     const heartbeat = setInterval(() => report('heartbeat', { spawned, world, presence }), heartbeatMs)
+
+    function closeMovement() {
+      try {
+        const result = onClosing(bot)
+        if (result && typeof result.then === 'function') {
+          // A deferred halt cannot satisfy this synchronous actuation boundary.
+          // Observe rejection without waiting for an uncooperative callback.
+          Promise.resolve(result).catch(() => {})
+          throw new Error('Closing callback must be synchronous')
+        }
+        return true
+      } catch {
+        report('failed', { category: 'movement_halt' })
+        return false
+      }
+    }
 
     function settle(closed) {
       if (settled) return
       settled = true
       clearTimeout(closeTimer)
+      clearTimeout(sessionTimer)
       clearTimeout(timeout)
       clearInterval(heartbeat)
       signal?.removeEventListener('abort', abort)
@@ -87,16 +110,25 @@ function observe(createBot, report, signal, timeoutMs, heartbeatMs, closeMs) {
       outcome = category ? { category } : { ok: true }
       if (category) report('failed', { category })
       clearTimeout(timeout)
+      clearTimeout(sessionTimer)
       clearInterval(heartbeat)
       closeTimer = setTimeout(() => {
-        bot._client?.socket?.destroy()
+        try { bot._client?.socket?.destroy() } catch { /* still fail settlement closed */ }
         settle(false)
       }, closeMs)
-      bot.quit('SaraCraft verification complete')
+      if (!closeMovement() && outcome.ok) outcome = { category: 'movement_halt' }
+      try { bot.quit('SaraCraft session complete') } catch { /* close deadline still bounds settlement */ }
     }
     function abort() { finish('shutdown') }
     function complete() {
-      if (spawned && world && presence) finish()
+      if (!spawned || !world || !presence || ready) return
+      ready = true
+      if (!stay) finish()
+      else {
+        clearTimeout(timeout)
+        report('movement_ready', { durationSeconds: sessionMs / 1000 })
+        sessionTimer = setTimeout(() => finish(), sessionMs)
+      }
     }
     bot.on('login', () => { if (!outcome) report('login') })
     bot.once('spawn', () => {
@@ -124,6 +156,7 @@ function observe(createBot, report, signal, timeoutMs, heartbeatMs, closeMs) {
     bot.once('end', () => {
       if (!outcome) {
         outcome = { category: 'disconnection' }
+        closeMovement()
         report('failed', outcome)
       }
       settle(true)

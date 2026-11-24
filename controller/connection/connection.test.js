@@ -33,7 +33,7 @@ async function scenarios(sequence, options = {}) {
   let quits = 0
   const events = []
   const result = await verifyConnection({
-    ...options, config: target, closeMs: 20, heartbeatMs: 10, timeoutMs: 60, retryDelayMs: 1,
+    config: target, closeMs: 20, heartbeatMs: 10, timeoutMs: 60, retryDelayMs: 1, ...options,
     report: (event, detail) => events.push({ event, detail }),
     createBot() {
       const action = sequence[attempts++]
@@ -100,4 +100,75 @@ test('reports heartbeat and handles explicit shutdown', async () => {
   assert.equal(quits, 1)
   assert.ok(events.some(e => e.event === 'heartbeat'))
   assert.equal(events.at(-1).event, 'disconnected')
+})
+
+function ready(bot) {
+  bot.emit('spawn')
+  bot.emit('chunkColumnLoad')
+  bot.emit('playerJoined', { uuid: identity.uuid })
+}
+
+test('movement session stays after readiness and halts before bounded clean quit', async () => {
+  const ordering = []
+  const { result, quits, events } = await scenarios([bot => {
+    const quit = bot.quit
+    bot.quit = () => { ordering.push('quit'); quit() }
+    ready(bot)
+    ordering.push('ready')
+  }], { stay: true, sessionMs: 10, onClosing: () => ordering.push('halt') })
+  assert.equal(result, true)
+  assert.equal(quits, 1)
+  assert.deepEqual(ordering, ['ready', 'halt', 'quit'])
+  assert.deepEqual(events.filter(e => e.event === 'movement_ready').map(e => e.detail), [{ durationSeconds: 0.01 }])
+})
+
+test('shutdown cancels a ready movement session and halts once without retry', async () => {
+  const controller = new AbortController()
+  let halts = 0
+  const result = await scenarios([bot => {
+    ready(bot)
+    controller.abort()
+  }], { stay: true, sessionMs: 100, signal: controller.signal, onClosing: () => halts++ })
+  assert.equal(result.result, false)
+  assert.equal(result.attempts, 1)
+  assert.equal(halts, 1)
+  assert.equal(result.events.find(e => e.event === 'failed').detail.category, 'shutdown')
+})
+
+test('disconnect during a ready movement session halts and never reconnects', async () => {
+  let halts = 0
+  const result = await scenarios([bot => { ready(bot); bot.emit('end') }],
+    { stay: true, sessionMs: 100, onClosing: () => halts++ })
+  assert.equal(result.result, false)
+  assert.equal(result.attempts, 1)
+  assert.equal(halts, 1)
+})
+
+test('hung transport quit is bounded and a throwing halt cannot report success', async () => {
+  let destroyed = 0
+  const result = await scenarios([bot => {
+    bot._client = { socket: { destroy() { destroyed++; throw new Error('mock failure') } } }
+    bot.quit = () => {}
+    ready(bot)
+  }], { stay: true, sessionMs: 5, onClosing() { throw new Error('mock halt failure') } })
+  assert.equal(result.result, false)
+  assert.equal(result.attempts, 1)
+  assert.equal(destroyed, 1)
+  assert.ok(result.events.some(e => e.event === 'failed' && e.detail.category === 'movement_halt'))
+})
+
+test('movement session rejects invalid or excessive durations before bot creation', async () => {
+  for (const sessionMs of [0, -1, NaN, Infinity, 480_001]) {
+    await assert.rejects(verifyConnection({ config: target, sessionMs,
+      report() {}, createBot() { assert.fail('must not create bot') } }), /Invalid bounded/)
+  }
+})
+
+test('asynchronous closing hooks are rejected without waiting or unhandled rejection', async () => {
+  for (const onClosing of [() => new Promise(() => {}), () => Promise.reject(new Error('mock failure'))]) {
+    const result = await scenarios([ready], { stay: true, sessionMs: 5, onClosing })
+    assert.equal(result.result, false)
+    assert.equal(result.quits, 1)
+    assert.ok(result.events.some(e => e.event === 'failed' && e.detail.category === 'movement_halt'))
+  }
 })

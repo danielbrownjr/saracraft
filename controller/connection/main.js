@@ -3,6 +3,8 @@ import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import mineflayer from 'mineflayer'
 import prismarineAuth from 'prismarine-auth'
+// Import movement dynamically only in --walk. --observe cannot load pathfinder.
+import { runtimeOptions } from './runtime-config.js'
 import { classify, identity, target, verifiedProfile, verifyConnection } from './connection.js'
 
 process.umask(0o077)
@@ -41,7 +43,7 @@ function privateDeviceCode({ verification_uri: uri, user_code: code }) {
   }
 }
 
-async function main() {
+async function main({ walk, observe, commanderUuid }) {
   for (const path of ['/auth', cache]) {
     const stat = lstatSync(path)
     if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) {
@@ -56,28 +58,45 @@ async function main() {
     const auth = new Authflow(identity.name, cache, {
       authTitle: Titles.MinecraftNintendoSwitch, deviceType: 'Nintendo', flow: 'live'
     }, privateDeviceCode)
-    credentials = await auth.getMinecraftJavaToken({ fetchProfile: true })
+    credentials = await auth.getMinecraftJavaToken({ fetchProfile: true, fetchCertificates: walk })
     verifiedProfile(credentials)
+    if (walk && !credentials.certificates?.profileKeys) {
+      report('failed', { category: 'chat_certificate_unavailable' })
+      return false
+    }
   } catch (error) {
     report('failed', { category: classify('auth', error) })
     return false
   }
   if (abort.signal.aborted) return false
-  report('identity_verified', identity)
+  report('identity_verified', observe ? {} : identity)
   connecting = true
+  const installMovement = walk ? (await import('./movement.js')).enableMovement : null
+  const installObserver = observe ? (await import('./observe.js')).enableObservation : null
+  let attachment
+  const trialReport = observe ? (event, details = {}) => {
+    if (event === 'spawn') return report('spawn')
+    if (event === 'player_presence') return report('player_presence', { self: details.self === true })
+    if (event === 'movement_ready') return report('observation_ready')
+    return report(event, details)
+  } : report
   return verifyConnection({
-    config: target, report, signal: abort.signal,
-    createBot: () => mineflayer.createBot({
+    config: target, report: trialReport, signal: abort.signal,
+    stay: walk || observe, sessionMs: observe ? 180_000 : 480_000,
+    onClosing: () => attachment?.dispose(),
+    createBot: () => {
+      const bot = mineflayer.createBot({
       ...target,
       username: identity.name,
-      physicsEnabled: false,
-      disableChatSigning: true,
+      physicsEnabled: walk,
+      disableChatSigning: !walk,
       hideErrors: true,
       auth(client, options) {
         const profile = verifiedProfile(credentials)
         const session = { accessToken: credentials.token, selectedProfile: profile, availableProfile: [profile] }
         options.haveCredentials = true
         options.accessToken = credentials.token
+        if (walk) Object.assign(client, credentials.certificates)
         client.session = session
         client.username = profile.name
         queueMicrotask(() => {
@@ -89,17 +108,29 @@ async function main() {
           }
         })
       }
-    })
+      })
+      if (walk || observe) {
+        try {
+          attachment = walk
+            ? installMovement(bot, commanderUuid, trialReport, { signal: abort.signal })
+            : installObserver(bot, trialReport)
+        } catch {
+          queueMicrotask(() => bot.emit('error', new Error('Session initialization failed')))
+        }
+      }
+      return bot
+    }
   })
 }
 
 try {
+  const options = runtimeOptions(process.argv.slice(2), process.env)
   const authDeadline = setTimeout(() => {
     report('failed', { category: 'authentication_timeout' })
     process.exit(1)
-  }, 8 * 60_000)
+  }, (options.walk ? 17 : options.observe ? 9 : 8) * 60_000)
   authDeadline.unref()
-  process.exitCode = (await main()) ? 0 : 1
+  process.exitCode = (await main(options)) ? 0 : 1
   clearTimeout(authDeadline)
 } catch {
   process.stdout.write('SaraCraft verification failed during setup.\n')
