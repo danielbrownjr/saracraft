@@ -292,3 +292,74 @@ test('throwing telemetry preserves STATE_UNAVAILABLE in controller and monitor r
   assert.equal(f.reports.find(r => r.event === 'movement_safety').reason, 'STATE_UNAVAILABLE')
   await f.close()
 })
+
+test('Paper wire cache references verify without weakening signed STOP or replay gating', async () => {
+  const require = createRequire(import.meta.url)
+  const { createSerializer, createDeserializer, states } = require('minecraft-protocol')
+  const installChat = require('minecraft-protocol/src/client/chat')
+  const { concat } = require('minecraft-protocol/src/transforms/binaryStream')
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const session = '00000000-0000-4000-8000-000000000002'
+  const keyBytes = publicKey.export({ format: 'der', type: 'spki' })
+  const version = '1.21.11'
+  const writer = createSerializer({ state: states.PLAY, version, isServer: true })
+  const reader = createDeserializer({ state: states.PLAY, version })
+  const f = fixture()
+  const uncorrected = new EventEmitter()
+  for (const client of [f.bot._client, uncorrected]) {
+    client.version = version
+    client.write = () => {}
+    installChat(client, {})
+    client.emit('player_info', { data: [{ uuid, chatSession: {
+      uuid: session, publicKey: { keyBytes }
+    } }] })
+  }
+  const verification = []
+  uncorrected.on('playerChat', event => verification.push(event.verified === true))
+  function send(plainMessage, index, refs, acknowledged, { ahead = false, tamper = false } = {}) {
+    const timestamp = BigInt(Date.now() + (ahead ? 5000 : -1000))
+    const body = concat('i32', 1, 'UUID', uuid, 'UUID', session, 'i32', index, 'i64', 0n,
+      'i64', timestamp / 1000n, 'i32', Buffer.byteLength(plainMessage), 'pstring', plainMessage,
+      'i32', acknowledged.length, 'buffer', Buffer.concat(acknowledged))
+    const signature = sign('RSA-SHA256', body, privateKey)
+    if (tamper) signature[0] ^= 0xff
+    const buffer = writer.createPacketBuffer({ name: 'player_chat', params: {
+      globalIndex: index, senderUuid: uuid, index, signature, plainMessage, timestamp, salt: 0n,
+      previousMessages: refs.map(id => ({ id })), filterType: 0,
+      type: { chatType: 0 }, networkName: { type: 'string', value: 'fixture' }
+    } })
+    for (const client of [uncorrected, f.bot._client]) {
+      const { name, params } = reader.parsePacketBuffer(buffer).data
+      assert.equal(typeof params.timestamp, 'object')
+      assert.equal(params.timestamp.valueOf(), timestamp)
+      client.emit(name, params)
+    }
+    return signature
+  }
+  try {
+    const first = send('ordinary fixture message', 0, [], [])
+    const second = send('!sara follow', 1, [1], [first])
+    await flush()
+    assert.deepEqual(verification, [true, false], 'pinned verifier alone misses Paper cache slot zero')
+    assert.ok(f.controller.activeTaskId)
+    send('!sara stop', 2, [1, 2], [second, first])
+    await flush()
+    assert.equal(f.controller.activeTaskId, null)
+    send('!sara follow', 3, [], [], { ahead: true })
+    await flush()
+    assert.equal(f.controller.activeTaskId, null)
+    assert.equal(f.reports.at(-1).timestampPresent, true)
+    assert.equal(f.reports.at(-1).timestampAhead, true)
+    const third = send('ordinary signed message', 4, [], [])
+    send('!sara follow', 5, [1], [third], { tamper: true })
+    await flush()
+    assert.equal(f.controller.activeTaskId, null)
+    assert.equal(f.reports.at(-1).packedSignaturesResolved, true)
+    assert.equal(f.reports.at(-1).signatureVerified, false)
+    send('!sara follow', 6, [128], [])
+    await flush()
+    assert.equal(f.controller.activeTaskId, null)
+    assert.equal(f.reports.at(-1).packedReferences, true)
+    assert.equal(f.reports.at(-1).packedSignaturesResolved, false)
+  } finally { await f.close() }
+})
