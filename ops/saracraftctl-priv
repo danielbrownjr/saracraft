@@ -32,6 +32,7 @@ CHAT_WIRE_CHECKS = {
     "wireObserved", "signaturePresent", "unsignedDecoration", "chatSessionKnown",
     "timestampAhead", "timestampExpired", "timestampPresent",
 }
+CHAT_PACKET_CHECKS = {"chatChainIntact", "packedReferences", "packedSignaturesResolved"}
 SAFE_EVENT = {
     "authenticating": set(),
     "authorization_required": set(),
@@ -47,7 +48,7 @@ SAFE_EVENT = {
                          "chunkColumnsLoaded", "entityCount", "entitiesObserved",
                          "inWater", "blockVolumeInWater", "physicsWaterFlag",
                          "creeperDistanceBlocks", "verdict", "onGround", "displacementMilliblocks"},
-    "movement_ignored": CHAT_CHECKS | CHAT_WIRE_CHECKS,
+    "movement_ignored": CHAT_CHECKS | CHAT_WIRE_CHECKS | CHAT_PACKET_CHECKS,
     "heartbeat": {"spawned", "world", "presence"},
     "disconnected": set(),
     "reconnecting": {"attempt"},
@@ -126,7 +127,8 @@ def sanitize(entry):
         return None
     if event == "movement_ignored":
         fields = set(entry) - {"time", "run", "event"}
-        if fields != CHAT_CHECKS and fields != CHAT_CHECKS | CHAT_WIRE_CHECKS:
+        if fields not in (CHAT_CHECKS, CHAT_CHECKS | CHAT_WIRE_CHECKS,
+                          CHAT_CHECKS | CHAT_WIRE_CHECKS | CHAT_PACKET_CHECKS):
             return None
     result = {"time": entry["time"], "event": event}
     for name in SAFE_EVENT[event]:

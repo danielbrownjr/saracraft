@@ -106,11 +106,12 @@ class BackendTests(unittest.TestCase):
                 "run": "00000000-0000-4000-8000-000000000001", "event": "movement_ignored"}
         core = dict.fromkeys(priv.CHAT_CHECKS, False)
         wire = dict.fromkeys(priv.CHAT_WIRE_CHECKS, True)
-        for checks in (core, {**core, **wire}):
+        packet = dict.fromkeys(priv.CHAT_PACKET_CHECKS, True)
+        for checks in (core, {**core, **wire}, {**core, **wire, **packet}):
             safe = priv.sanitize({**base, **checks})
             self.assertEqual(safe, {"time": base["time"], "event": base["event"], **checks})
         for extra in ({"signatureVerified": 1}, {"signature": "secret"},
-                      {"uuid": "secret"}, {"chatSessionKnown": True}):
+                      {"uuid": "secret"}, {"chatSessionKnown": True}, {"packedReferences": True}):
             self.assertIsNone(priv.sanitize({**base, **core, **extra}))
         self.assertIsNone(priv.sanitize({**base, "signatureVerified": False}))
 

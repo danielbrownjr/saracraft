@@ -4,6 +4,7 @@ import { SaraController } from '../src/controller.js'
 import { assessNavigation, NavigationSafetyMonitor } from '../navigation/safety.js'
 import pathfinder from 'mineflayer-pathfinder'
 import { createTelemetry, isWater } from './telemetry.js'
+import { isCommandCandidate, observeChatWire } from './chat-admission.js'
 
 const { Movements, goals, pathfinder: plugin } = pathfinder
 const movementCommands = new Set(['follow', 'stop', 'comeHere'])
@@ -250,31 +251,8 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   }
   let lastChatIndex = -1
   let commandSequence = 0
-  let wireChat
-  const isCommandCandidate = text => typeof text === 'string' && /^\s*!sara(?:\s|$)/i.test(text)
-  function inspectPlayerChat(packet) {
-    wireChat = undefined
-    if (!isCommandCandidate(packet.plainMessage)) return
-    // minecraft-protocol emits playerChat synchronously from player_chat.
-    // Retain only booleans and correlation fields until that event is consumed.
-    const timestamp = typeof packet.timestamp === 'bigint' ? packet.timestamp : 0n
-    const age = BigInt(Date.now()) - timestamp
-    wireChat = {
-      sender: packet.senderUuid, index: packet.globalIndex,
-      flags: {
-        wireObserved: true,
-        signaturePresent: Boolean(packet.signature),
-        unsignedDecoration: Boolean(packet.unsignedChatContent),
-        chatSessionKnown: Boolean(bot._client._players?.[packet.senderUuid]?.sessionUuid),
-        timestampAhead: timestamp > 0n && age < 0n,
-        timestampExpired: timestamp > 0n && age > 420_000n,
-        timestampPresent: timestamp > 0n
-      }
-    }
-  }
   async function playerChat(packet) {
-    const observed = wireChat
-    wireChat = undefined
+    const wire = options.chatWire.take(packet)
     if (!isCommandCandidate(packet?.plainMessage)) return
     const command = parseCommand(packet.plainMessage)
     const index = packet.globalIndex
@@ -290,10 +268,9 @@ function installMovement(bot, commanderUuid, report, options = {}) {
       commandParsed: movementCommands.has(command?.kind)
     }
     const envelope = commandEnvelope({ sender: packet.sender, plainMessage: packet.plainMessage,
-      authenticated: Object.values(checks).every(Boolean) }, commanderUuid)
+      authenticated: Object.values(checks).every(Boolean) && wire.packedSignaturesResolved !== false }, commanderUuid)
     if (!envelope) {
-      const flags = observed && observed.sender === packet.sender && observed.index === index ? observed.flags : {}
-      report('movement_ignored', { ...checks, ...flags })
+      report('movement_ignored', { ...checks, ...wire })
       return
     }
     lastChatIndex = index
@@ -331,8 +308,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
     if (disposed) return
     disposed = true
     bot._client.removeListener('playerChat', onPlayerChat)
-    bot._client.removeListener('player_chat', inspectPlayerChat)
-    wireChat = undefined
+    options.chatWire.dispose()
     for (const name of ['blockUpdate', 'entityMoved', 'entitySpawn', 'entityGone', 'entityUpdate', 'chunkColumnUnload', 'chunkColumnLoad']) bot.removeListener(name, stateChanged)
     bot.removeListener('path_update', pathUpdate); bot.removeListener('path_reset', pathReset)
     bot.removeListener('physicsTick', tick); bot.removeListener('goal_reached', goalReached)
@@ -347,7 +323,6 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   bot.prependListener('physicsTick', tick); bot.on('goal_reached', goalReached)
   for (const name of ['blockUpdate', 'entityMoved', 'entitySpawn', 'entityGone', 'entityUpdate', 'chunkColumnUnload', 'chunkColumnLoad']) bot.on(name, stateChanged)
   const onPlayerChat = packet => { void playerChat(packet).catch(() => shutdown()) }
-  bot._client.prependListener('player_chat', inspectPlayerChat)
   bot._client.on('playerChat', onPlayerChat)
   bot.once('end', end)
   if (policy === 'supervised-dry') {
@@ -365,14 +340,16 @@ function installMovement(bot, commanderUuid, report, options = {}) {
 // Observe protocol metadata immediately, initialize pathfinder only after spawn.
 export function enableMovement(bot, commanderUuid, report, options = {}) {
   const telemetry = options.telemetry ?? createTelemetry(bot, { now: options.now ?? Date.now, policy: options.policy ?? 'strict' })
+  const chatWire = observeChatWire(bot._client)
   let installed
   let closing = false
   const initialize = () => {
     if (closing || options.signal?.aborted) return
-    try { installed = installMovement(bot, commanderUuid, report, { ...options, telemetry }) }
+    try { installed = installMovement(bot, commanderUuid, report, { ...options, telemetry, chatWire }) }
     catch {
       closing = true
       telemetry.dispose()
+      chatWire.dispose()
       try { bot.clearControlStates?.() } catch {}
       try { report('movement_unavailable', { reason: 'MOVEMENT_SETUP_FAILED' }) } catch {}
       // verifyConnection installs its error handler once createBot returns.
@@ -397,13 +374,13 @@ export function enableMovement(bot, commanderUuid, report, options = {}) {
     }
   }
   options.signal?.addEventListener('abort', shutdown, { once: true })
-  bot.once('end', () => { try { shutdown() } finally { telemetry.dispose() } })
+  bot.once('end', () => { try { shutdown() } finally { telemetry.dispose(); chatWire.dispose() } })
   halt.dispose = () => {
     closing = true
     bot.removeListener('spawn', initialize)
     try { halt() }
     finally {
-      installed?.dispose(); telemetry.dispose()
+      installed?.dispose(); telemetry.dispose(); chatWire.dispose()
       options.signal?.removeEventListener('abort', shutdown)
     }
   }
