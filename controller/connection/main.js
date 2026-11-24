@@ -33,7 +33,7 @@ function report(event, details = {}) {
   if (evidence === '/auth/verification.jsonl') process.stdout.write(line)
 }
 
-async function main({ walk, observe, commanderUuid }) {
+async function main({ walk, observe, commanderUuid, policy = 'strict' }) {
   for (const path of ['/auth', cache]) {
     const stat = lstatSync(path)
     if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) {
@@ -73,7 +73,7 @@ async function main({ walk, observe, commanderUuid }) {
   return verifyConnection({
     config: target, report: trialReport, signal: abort.signal,
     stay: walk || observe, sessionMs: observe ? observationTiming.sessionMs : 480_000,
-    maxAttempts: observe ? 1 : 2,
+    maxAttempts: observe || policy === 'supervised-dry' ? 1 : 2,
     onClosing: () => attachment?.dispose(),
     createBot: () => {
       const bot = mineflayer.createBot({
@@ -104,7 +104,7 @@ async function main({ walk, observe, commanderUuid }) {
       if (walk || observe) {
         try {
           attachment = walk
-            ? installMovement(bot, commanderUuid, trialReport, { signal: abort.signal })
+            ? installMovement(bot, commanderUuid, trialReport, { signal: abort.signal, policy })
             : installObserver(bot, trialReport)
         } catch {
           queueMicrotask(() => bot.emit('error', new Error('Session initialization failed')))
