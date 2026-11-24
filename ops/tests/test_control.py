@@ -80,6 +80,27 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(safe["creeperDistanceBlocks"], 3)
         self.assertNotIn("run", safe)
 
+    def test_passive_observation_diagnostics_are_bounded(self):
+        base = {"time": "2026-11-23T12:00:00.000Z",
+                "run": "00000000-0000-4000-8000-000000000001",
+                "event": "telemetry_sample"}
+        for ground in (True, False, None):
+            for displacement in (None, 0, 2900, 1000000):
+                safe = priv.sanitize({**base, "onGround": ground,
+                                      "displacementMilliblocks": displacement})
+                self.assertIsNotNone(safe)
+                self.assertEqual(safe["onGround"], ground)
+                self.assertEqual(safe["displacementMilliblocks"], displacement)
+        for key, value in [("onGround", 1), ("onGround", "true"),
+                           ("displacementMilliblocks", -1),
+                           ("displacementMilliblocks", 1000001),
+                           ("displacementMilliblocks", 1.5),
+                           ("displacementMilliblocks", True),
+                           ("displacementMilliblocks", "secret"),
+                           ("position", [1, 2, 3])]:
+            self.assertIsNone(priv.sanitize({**base, key: value}))
+        self.assertIsNotNone(priv.sanitize(base))
+
     def test_logs_drop_unsanitized_raw_lines(self):
         run = "00000000-0000-4000-8000-000000000001"
         source = "\n".join([
