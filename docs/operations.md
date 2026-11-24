@@ -1,6 +1,6 @@
 # SaraCraft restricted runtime control, Stage 1 source design
 
-**Status:** proposed source and offline tests only. Nothing here is installed or authorized for live Minecraft use. PR #5 and PR #6 remain draft, unmerged. The pinned observation safety behavior remains required.
+**Status (2026-11-24):** Stage 1–3 source PRs #5–#11 merged to `main`. Source merge is not host deployment or authorization for Minecraft use. A Stage 2 release at `50a2159` was previously installed on Hephaestus (per the 2026-11-23 acceptance record), and the credential-free synthetic host gate passed for unpromoted `407a1d8`; current host state has not been rechecked. The pinned observation safety behavior and emergency inhibit remain required.
 
 ## Trust boundaries
 
@@ -11,7 +11,7 @@
 - Bot has no direct Minecraft server world or Docker access. Systemd service keeps its own process cgroup independent of Codex/tmux.
 - Initial unit is strictly `--observe`; movement cannot be selected by `saracraftctl`.
 
-## Proposed interface (not installed)
+## Fixed-verb interface (installation and live use separately gated)
 
 ```text
 saracraftctl start observe
