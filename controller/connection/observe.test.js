@@ -163,3 +163,29 @@ test('production entrypoint enables physics for passive observation', async () =
   const source = await readFile(new URL('./main.js', import.meta.url), 'utf8')
   assert.match(source, /mineflayer\.createBot\(\{[\s\S]*?physicsEnabled:\s*walk\s*\|\|\s*observe\s*,/)
 })
+
+test('passive diagnostics establish a fixed grounded baseline and report no coordinates', () => {
+  const { bot, observer, events } = fixture()
+  bot.physicsEnabled = true
+  const sample = () => { observer.sample(); return events.at(-1).payload }
+  try {
+    assert.equal(sample().onGround, null)
+    bot.entity.onGround = false
+    assert.equal(sample().onGround, false)
+    bot.entity.onGround = true
+    assert.equal(sample().displacementMilliblocks, null)
+    assert.equal(sample().displacementMilliblocks, 0)
+    bot.entity.position.x += 2.9
+    assert.equal(sample().displacementMilliblocks, 2900)
+    bot.entity.onGround = false
+    assert.equal(sample().onGround, false)
+    assert.equal(sample().displacementMilliblocks, 2900)
+    bot.entity.position.x = NaN
+    assert.equal(sample().displacementMilliblocks, null)
+    bot.entity.position.x = 0.5
+    assert.equal(sample().displacementMilliblocks, 0)
+    assert.equal(sample().verdict, 'UNKNOWN_STATE')
+    assert.doesNotMatch(JSON.stringify(events), /position|username|uuid|accessToken/i)
+    assert.equal(bot.lastControl, undefined)
+  } finally { observer.dispose() }
+})
