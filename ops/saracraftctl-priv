@@ -38,7 +38,7 @@ SAFE_EVENT = {
     "telemetry_sample": {"rawAirReceived", "airPacketCount", "airPacketAgeMs",
                          "chunkColumnsLoaded", "entityCount", "entitiesObserved",
                          "inWater", "blockVolumeInWater", "physicsWaterFlag",
-                         "creeperDistanceBlocks", "verdict"},
+                         "creeperDistanceBlocks", "verdict", "onGround", "displacementMilliblocks"},
     "heartbeat": {"spawned", "world", "presence"},
     "disconnected": set(),
     "reconnecting": {"attempt"},
@@ -112,10 +112,10 @@ def sanitize(entry):
             if value not in ("UNKNOWN_STATE", "STATE_UNAVAILABLE"): return None
         elif name in ("rawAirReceived", "entitiesObserved", "self", "spawned", "world", "presence"):
             if type(value) is not bool: return None
-        elif name in ("inWater", "blockVolumeInWater"):
+        elif name in ("inWater", "blockVolumeInWater", "onGround"):
             if value is not None and type(value) is not bool: return None
         elif name in ("attempt", "airPacketCount", "airPacketAgeMs", "chunkColumnsLoaded",
-                      "entityCount", "creeperDistanceBlocks"):
+                      "entityCount", "creeperDistanceBlocks", "displacementMilliblocks"):
             if value is not None and (type(value) is not int or not 0 <= value <= 1_000_000):
                 return None
         else:
