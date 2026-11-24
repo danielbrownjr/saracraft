@@ -41,7 +41,7 @@ export function enableObservation(bot, report, { now = Date.now, intervalMs = 10
       rawAirReceived: false, airPacketCount: telemetry.airPacketCount,
       airPacketAgeMs: null, chunkColumnsLoaded: 0, entityCount: null,
       entitiesObserved: false, inWater: null, blockVolumeInWater: null,
-      physicsWaterFlag: 'unavailable_physics_disabled', creeperDistanceBlocks: null,
+      creeperDistanceBlocks: null,
       verdict: 'UNKNOWN_STATE'
     }
     try {
@@ -63,18 +63,17 @@ export function enableObservation(bot, report, { now = Date.now, intervalMs = 10
           chunkColumnsLoaded: loaded,
           entityCount: observedEntities.entityCount,
           entitiesObserved: observedEntities.entitiesObserved,
-          // With physics disabled Mineflayer never initializes isInWater.
-          // Report observed block-volume immersion separately without falsely
-          // claiming the combined navigation verdict has passed.
+          // Block-volume immersion is an independent observation. It does not
+          // establish the combined navigation verdict.
           inWater: null,
           blockVolumeInWater: telemetry.observeBlockImmersion(),
-          physicsWaterFlag: 'unavailable_physics_disabled',
           creeperDistanceBlocks: Number.isFinite(observedEntities.creeperDistance)
             ? Math.round(observedEntities.creeperDistance) : null,
           verdict: 'UNKNOWN_STATE'
         }
       }
     } catch { details.verdict = 'STATE_UNAVAILABLE' }
+    if (!bot.physicsEnabled) details.physicsWaterFlag = 'unavailable_physics_disabled'
     report('telemetry_sample', details)
   }
   function onSpawn() {

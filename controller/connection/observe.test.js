@@ -65,6 +65,18 @@ test('stationary samples are sanitized and never issue movement controls', () =>
   observer.dispose()
 })
 
+test('physics-enabled observation keeps navigation unknown without a disabled-physics flag', () => {
+  const { bot, observer, events } = fixture()
+  bot.physicsEnabled = true
+  bot.emit('spawn')
+  const sample = events[0].payload
+  assert.equal(sample.physicsWaterFlag, undefined)
+  assert.equal(sample.inWater, null)
+  assert.equal(sample.blockVolumeInWater, false)
+  assert.equal(sample.verdict, 'UNKNOWN_STATE')
+  observer.dispose()
+})
+
 test('missing air does not hide loaded entities and nearby creeper', () => {
   const { bot, observer, events } = fixture()
   bot.entities[2] = { id: 2, name: 'creeper', position: new Vec3(3.5, 64, 0.5) }
@@ -121,7 +133,7 @@ test('unknown chunk coverage remains fail-closed', () => {
 test('real createBot defers control injection; observe guards after inject_allowed', async () => {
   const bot = mineflayer.createBot({
     username: 'offline_fixture', version: '1.21.11',
-    physicsEnabled: false, disableChatSigning: true,
+    physicsEnabled: true, disableChatSigning: true,
     auth() { /* Do not connect, authenticate, or emit session. */ }
   })
   const observer = enableObservation(bot, () => {})
@@ -134,6 +146,7 @@ test('real createBot defers control injection; observe guards after inject_allow
         resolve()
       })
     })
+    assert.equal(bot.physicsEnabled, true)
     assert.equal(typeof bot.setControlState, 'function')
     assert.throws(() => bot.setControlState('forward', true), /prohibits actuation/)
     assert.throws(() => bot.pathfinder, /prohibits pathfinder access/)
