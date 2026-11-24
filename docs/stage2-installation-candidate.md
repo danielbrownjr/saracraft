@@ -2,7 +2,7 @@
 
 **Base (historical):** PR #7 `6844ac8bc2d1c8f09cab5957873c64f20fbbc1b6`, independently accepted on previous scope.
 **Host evidence:** Hephaestus preflight of November 23, 2026, including authorized ownership-only metadata checks.
-**Status (2026-11-24):** PR #8 is merged to `main`. Stage 2 release `50a2159` was subsequently installed and verified on Hephaestus according to the 2026-11-23 host acceptance report; this document retains the earlier candidate-stage facts for historical context. Current host state has not been rechecked since the source merges. PR #11 (`407a1d8`) passed synthetic credential-free host acceptance but is not known to be promoted. The emergency inhibit remains mandatory and no live authentication or gameplay is authorized.
+**Status (2026-11-24):** PR #8 is merged to `main`. Stage 2 release `50a2159` was subsequently installed and verified on Hephaestus according to the 2026-11-23 Stage 3 Hephaestus acceptance record; this document retains the earlier candidate-stage facts for historical context. Current host state has not been rechecked since the source merges. PR #11 (`407a1d8`) passed synthetic credential-free host acceptance but is not known to be promoted. The emergency inhibit remains mandatory and no live authentication or gameplay is authorized.
 
 ## Approved source-level trust and logging decisions (2026-11-23)
 
@@ -10,7 +10,7 @@ Dan approved retaining `daniel` as the human host administrator for recovery and
 
 **Important limit:** `daniel` currently belongs to `sudo`, `adm`, and `lxd`. This is **operational separation**, not a hardened claim that the host administrator cannot access a protected bot. Do not revoke these groups without a separate recovery and trust-model authorization.
 
-## Current verified host facts
+## Historical pre-installation host facts (2026-11-23; not current state)
 
 - Host: systemd 259.9; Python 3.14.4 with isolated `-I`; developer-private Node 22.23.4; `/usr/bin/node` absent.
 - Required Node: 22.23.5, not installed to the expected root-controlled path.
@@ -28,7 +28,7 @@ Dan approved retaining `daniel` as the human host administrator for recovery and
 - `APPROVED-RELEASE` is a *presence-only administrative gate*. It does not validate the SHA it contains. The future promotion procedure must compare a separately trusted manifest and record the exact release Git SHA, Node binary SHA, dependency lock and installer hashes before placing the gate file.
 - `ops/saracraftctl-priv` now provides allowlisted systemd `Result`, `ConditionResult` and `ExecMainStatus` alongside ActiveState (F5). It still does not confirm Minecraft connected, a cgroup empty, or a server disconnect.
 
-## Remaining installation decisions and blockers
+## Historical installation decisions and blockers (pre-acceptance)
 
 1. **Logging source design completed; host acceptance BLOCKED.** Dan approved preserving administrator privileges and private runtime logs. Unit discards stdout/stderr; `main.js` writes the fixed bot-owned `/var/log/saracraft-bot/verification.jsonl` (0600) inside a 0700 bot-owned directory. The allowlisted `saracraftctl logs` helper reads only a bounded 256 KiB tail of that fixed file, rejects symlinks, wrong owner or unsafe modes, and discards unrecognized or oversized records. No journal fallback. Systemd may still journal its own lifecycle metadata. Validate installed effective behavior with a synthetic secret canary. Determine retention/rotation before deployment, rotating only when bot stopped and preserving private ownership; long-term unbounded disk growth is not acceptable.
 2. **Legacy launch inventory (HIGH).** Discover all services, containers, tmux tasks, cron, timers, credentials mounts and Sara-owned launch routes through an explicitly authorized bounded metadata inspection. Retire only approved mechanisms after new service is accepted, ensuring one bot connection.
@@ -39,7 +39,7 @@ Dan approved retaining `daniel` as the human host administrator for recovery and
 7. **Stop timing and status.** `systemctl stop --no-block` accepts a stop job; it does **not** prove the bot terminated. Assert empty service cgroup separately. The application 175-second backstop begins after imports and the systemd 180-second limit permits additional stop timeout. No guaranteed five-second reserve.
 8. **Human administrator decision (approved):** retain `daniel` as trusted administrator, without altering `sudo`/`adm`/`lxd` memberships. The model is operational separation, **not a security boundary against Codex running as `daniel`**. If LXD's daemon/socket is reachable to the `lxd` group, `daniel` (including Codex processes) may obtain root-equivalent access without a password and reach tokens/private logs. Preserve privileges as explicitly approved; verify LXD availability during host preflight, avoid reusable sudo timestamps in Codex sessions, and never claim this policy prevents intentional administrator bypass. This source task makes no host policy change.
 
-## Proposed Stage 2 sequence (separate explicit authorization required)
+## Historical Stage 2 sequence (any further host operation requires separate authorization)
 
 1. Approve trust/logging model. Snapshot only affected metadata/configuration. Capture exact ownership, presence and pre-change hashes.
 2. Offline, build root-installable release and root-controlled Node 22.23.5. `npm ci --ignore-scripts` only from reviewed lockfile. Generate a v2 manifest **outside the release tree** after final root-controlled copy, run `python3 ops/release_manifest.py verify /opt/saracraft/releases/<approved-sha> /root/<trusted-manifest>.json` under explicit administrative authorization, verify exact Git SHA and independent Node binary hash, and reject unexpected symlinks, hardlinks, unsafe ancestors, modes, ownership, or changed directory entries. The manifest must be kept in separate trusted custody, not written into the bot's live release.
@@ -54,4 +54,4 @@ Dan approved retaining `daniel` as the human host administrator for recovery and
 
 Before host writes record previous files, permissions, sudoers, service status and source SHA privately. For an installation failure, inhibit and stop only the new bot unit; verify its cgroup is empty, revoke its restricted sudoers grant and restore only modified installation-owned configuration. Keep credentials private, preserve server/world data, avoid automatic legacy restart and do not alter unrelated units. Never declare rollback verified without exercising it.
 
-**Next gate:** M1 strict release-tree ownership/mode audit and L1 missing-account handling are source changes pending exact-head CI and a focused independent re-review. Dan has approved the trust and private logging *source design*, not its installation. A separate independent review of the new private-file reader, unit output handling, status semantics and release verification plus installed-host dummy acceptance and a named Stage 2 authorization are still required. **Installation is BLOCKED**.
+**Historical pre-installation gate (superseded by subsequent Stage 2 acceptance):** M1 strict release-tree ownership/mode audit and L1 missing-account handling are source changes pending exact-head CI and a focused independent re-review. Dan has approved the trust and private logging *source design*, not its installation. A separate independent review of the new private-file reader, unit output handling, status semantics and release verification plus installed-host dummy acceptance and a named Stage 2 authorization are still required. **Installation was BLOCKED at that point.** The current next gate is separately authorized trusted promotion of `407a1d8`; recheck host metadata before proceeding.
