@@ -2,7 +2,7 @@
 
 A private Minecraft Java AI companion project for cooperative survival.
 
-**Status (2026-11-22): M0.8 Mineflayer movement integration under offline verification.** The recovered movement source is selectively reconciled with the reviewed M0.7 safety gate. Mock tests establish software behavior only; deployment and controlled Minecraft acceptance require separate authorization. See [M0.8 integration](docs/m0-8-integration.md) and [source reconciliation](docs/m0-8-reconciliation.md).
+**Status (2026-11-24): Wave 1 source PRs #5–#11 merged to `main`.** Navigation, observation-control, packaging and attended authentication-only source are reviewed; this does not install, activate, authenticate or permit Minecraft gameplay. The credential-free host acceptance gate passed for source `407a1d8`, while trusted-manifest promotion and real sign-in require separate authorization. See [M0.8 integration](docs/m0-8-integration.md), [source reconciliation](docs/m0-8-reconciliation.md), and [auth packaging/host acceptance](docs/auth-packaging-and-host-acceptance.md).
 
 ## Design choices
 
@@ -24,4 +24,4 @@ A private Minecraft Java AI companion project for cooperative survival.
 
 `compose.yaml` is a **nondeployable-by-default design template**. Deployment requires explicit approval, EULA acceptance, verified private bind IP, authenticated allowlist, immutable image digest, and a reviewed build. The illustrative bot profile is not a validated Mindcraft CE schema. No credentials belong in Git.
 
-Next gate: finish draft M0.8 review and obtain separate authorization for a bounded, attended Minecraft acceptance trial. No deployment or gameplay is authorized by the source changes.
+Next gate: separately authorized trusted-manifest promotion of exact reviewed source `407a1d8`, then separately gated attended authentication and stationary observation. PRs #3 and #4 remain draft. No deployment or gameplay is authorized by source merges.
