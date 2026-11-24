@@ -27,10 +27,21 @@ class State:
     result: str
     exit_status: int
     inhibited: bool
+    restarts: int
+    invocation: str
 
     @property
     def stopped(self):
         return self.active in TERMINAL and self.pid == 0 and not self.group
+
+
+def normalize_invocation(value):
+    value = value.strip()
+    if not value or value == "0" * 32:
+        return ""
+    if len(value) != 32 or any(c not in "0123456789abcdefABCDEF" for c in value):
+        raise ValueError("Invalid systemd invocation identity")
+    return value.lower()
 
 
 class RestrictedOperations:
@@ -43,7 +54,7 @@ class RestrictedOperations:
     def state(self):
         props = dict(line.split("=", 1) for line in self._read(
             SYSTEMCTL, "show", UNIT, "-p", "ActiveState,MainPID,ControlGroup,"
-            "ExecMainStartTimestampMonotonic,Result,ExecMainStatus"
+            "ExecMainStartTimestampMonotonic,Result,ExecMainStatus,NRestarts,InvocationID"
         ).splitlines())
         status = json.loads(self._read(CONTROL, "status"))
         if type(status.get("emergency_inhibit")) is not bool:
@@ -51,7 +62,8 @@ class RestrictedOperations:
         return State(props["ActiveState"], int(props["MainPID"]), props["ControlGroup"],
                      int(props["ExecMainStartTimestampMonotonic"]) / 1_000_000,
                      props["Result"], int(props["ExecMainStatus"]),
-                     status["emergency_inhibit"])
+                     status["emergency_inhibit"], int(props["NRestarts"]),
+                     normalize_invocation(props["InvocationID"]))
 
     def logs(self):
         return self._read(CONTROL, "logs").splitlines()
@@ -102,6 +114,16 @@ def require_safe_stream(events, now, elapsed):
         raise TrialStop("readiness_timeout")
     if elapsed > 175:
         raise TrialStop("application_deadline")
+
+
+def require_same_execution(state, started, invocation, restarts):
+    # A fully stopped unit may clear its execution timestamp and invocation ID.
+    # A different nonempty identity or changed restart count is never terminal
+    # evidence for the original execution.
+    if (state.restarts != restarts
+            or (state.invocation != invocation and not (state.stopped and not state.invocation))
+            or (state.started != started and not (state.stopped and state.started == 0))):
+        raise TrialStop("service_restarted")
 
 
 def normal_exit(events, state):
@@ -199,12 +221,15 @@ def observe(ops, *, clock=time.monotonic, wall=utc_now, sleep=time.sleep, announ
                 collector.ingest(before, launch.isoformat())
                 result["launch_utc"] = launch.isoformat()
                 started = state.started
+                invocation = state.invocation
+                restarts = state.restarts
+                if not invocation or restarts != 0:
+                    raise TrialStop("unattributable_service_start")
             if collector is None:
                 if current - armed_at >= 30:
                     raise TrialStop("operator_launch_timeout")
             else:
-                if state.started != started:
-                    raise TrialStop("service_restarted")
+                require_same_execution(state, started, invocation, restarts)
                 collector.ingest(ops.logs(), observed.isoformat())
                 events = sorted(collector.events.values(), key=lambda row: row["time"])
                 if state.stopped:
