@@ -24,6 +24,14 @@ CONTROL_DIR = Path("/var/lib/saracraft-control")
 LOCK = CONTROL_DIR / "operations.lock"
 INHIBIT = CONTROL_DIR / "inhibit"
 ALLOWED = {"start-observe", "status", "stop", "logs", "estop", "clear-inhibit"}
+CHAT_CHECKS = {
+    "signatureVerified", "encryptedTransport", "commanderMatched", "commanderInRoster",
+    "indexPresent", "indexValid", "indexFresh", "commandParsed",
+}
+CHAT_WIRE_CHECKS = {
+    "wireObserved", "signaturePresent", "unsignedDecoration", "chatSessionKnown",
+    "timestampAhead", "timestampExpired", "timestampPresent",
+}
 SAFE_EVENT = {
     "authenticating": set(),
     "authorization_required": set(),
@@ -39,6 +47,7 @@ SAFE_EVENT = {
                          "chunkColumnsLoaded", "entityCount", "entitiesObserved",
                          "inWater", "blockVolumeInWater", "physicsWaterFlag",
                          "creeperDistanceBlocks", "verdict", "onGround", "displacementMilliblocks"},
+    "movement_ignored": CHAT_CHECKS | CHAT_WIRE_CHECKS,
     "heartbeat": {"spawned", "world", "presence"},
     "disconnected": set(),
     "reconnecting": {"attempt"},
@@ -115,12 +124,18 @@ def sanitize(entry):
         return None
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", entry["run"]):
         return None
+    if event == "movement_ignored":
+        fields = set(entry) - {"time", "run", "event"}
+        if fields != CHAT_CHECKS and fields != CHAT_CHECKS | CHAT_WIRE_CHECKS:
+            return None
     result = {"time": entry["time"], "event": event}
     for name in SAFE_EVENT[event]:
         if name not in entry:
             continue
         value = entry[name]
-        if name == "category":
+        if event == "movement_ignored":
+            if type(value) is not bool: return None
+        elif name == "category":
             if value not in CATEGORIES: return None
         elif name == "physicsWaterFlag":
             if value != "unavailable_physics_disabled": return None

@@ -101,6 +101,19 @@ class BackendTests(unittest.TestCase):
             self.assertIsNone(priv.sanitize({**base, key: value}))
         self.assertIsNotNone(priv.sanitize(base))
 
+    def test_command_diagnostics_only_publish_complete_boolean_groups(self):
+        base = {"time": "2026-11-23T12:00:00.000Z",
+                "run": "00000000-0000-4000-8000-000000000001", "event": "movement_ignored"}
+        core = dict.fromkeys(priv.CHAT_CHECKS, False)
+        wire = dict.fromkeys(priv.CHAT_WIRE_CHECKS, True)
+        for checks in (core, {**core, **wire}):
+            safe = priv.sanitize({**base, **checks})
+            self.assertEqual(safe, {"time": base["time"], "event": base["event"], **checks})
+        for extra in ({"signatureVerified": 1}, {"signature": "secret"},
+                      {"uuid": "secret"}, {"chatSessionKnown": True}):
+            self.assertIsNone(priv.sanitize({**base, **core, **extra}))
+        self.assertIsNone(priv.sanitize({**base, "signatureVerified": False}))
+
     def test_logs_drop_unsanitized_raw_lines(self):
         run = "00000000-0000-4000-8000-000000000001"
         source = "\n".join([
