@@ -62,5 +62,7 @@ test('completion receipt cannot be replaced and errors release descriptors', () 
 // structural: end-to-end private-TTY/credential tests remain separately gated.
 test('CLI awaits provisioning before creating the completion receipt', () => {
   const source = readFileSync(new URL('./provision-auth.js', import.meta.url), 'utf8')
-  assert.match(source, /try\s*\{\s*await main\(\)\s*recordCompletion\(\)\s*\}\s*catch\s*\{/)
+  assert.match(source, /try\s*\{\s*await\s+main\(\)\s*;?\s*recordCompletion\(\)\s*;?\s*\}\s*catch\s*\{/)
+  assert.equal((source.match(/\brecordCompletion\s*\(/g) || []).length, 1,
+    'CLI must contain exactly one receipt call')
 })
