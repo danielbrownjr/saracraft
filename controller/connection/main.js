@@ -79,7 +79,8 @@ async function main({ walk, observe, commanderUuid }) {
       const bot = mineflayer.createBot({
       ...target,
       username: identity.name,
-      physicsEnabled: walk,
+      // Let the observer settle under gravity without enabling control inputs.
+      physicsEnabled: walk || observe,
       disableChatSigning: !walk,
       hideErrors: true,
       auth(client, options) {

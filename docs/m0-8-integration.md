@@ -37,7 +37,8 @@ The only added dependency is exact `mineflayer-pathfinder@2.4.5`; all prior lock
 ## Observation-only source candidate (not live accepted)
 
 `node main.js --observe` is an independent 180-second diagnostic launch mode.
-It disables physics and chat signing, requests no profile certificates, and
+It enables ordinary gravity and collision to settle at spawn, disables chat
+signing, requests no profile certificates, and
 imports neither pathfinder nor the movement adapter. A control wrapper rejects
 positive movement states; a pathfinder access trap rejects goals. No commander
 chat listener is installed. The telemetry observer attaches before spawn and
@@ -46,9 +47,8 @@ packet count/age, chunk coverage, entity readiness/count, immersion status,
 rounded creeper proximity and the fail-closed safety verdict. It reports no
 positions, usernames, UUIDs or chat content in diagnostic samples. The control
 guard is installed after Mineflayer's inject_allowed plugin event, not at
-createBot return time. With physics disabled, the block-volume water observation
-is reported separately; the physics water flag is explicitly unavailable and
-the combined navigation verdict is UNKNOWN_STATE by construction. This must not
+createBot return time. Block-volume immersion is reported separately, and the
+combined navigation verdict is UNKNOWN_STATE by construction. This must not
 be confused with missing raw-air packets or treated as a failed dry-ground
 movement-acceptance test. The player's
 current position is used only as a zero-distance observation target, without

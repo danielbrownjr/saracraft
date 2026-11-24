@@ -34,6 +34,10 @@ export function enableObservation(bot, report, { now = Date.now, intervalMs = 10
   })
   const telemetry = createTelemetry(bot, { now })
   let timer
+  // Diagnostic only: two consecutive grounded samples within 0.01 blocks
+  // establish a fixed baseline; never rebase after displacement.
+  let previousGrounded = null
+  let settled = null
 
   function sample() {
     if (disposed) return
@@ -41,12 +45,11 @@ export function enableObservation(bot, report, { now = Date.now, intervalMs = 10
       rawAirReceived: false, airPacketCount: telemetry.airPacketCount,
       airPacketAgeMs: null, chunkColumnsLoaded: 0, entityCount: null,
       entitiesObserved: false, inWater: null, blockVolumeInWater: null,
-      physicsWaterFlag: 'unavailable_physics_disabled', creeperDistanceBlocks: null,
+      creeperDistanceBlocks: null, onGround: null, displacementMilliblocks: null,
       verdict: 'UNKNOWN_STATE'
     }
     try {
       const position = bot.entity?.position
-      const timestamp = now()
       if (guardInstalled && position && ['x', 'y', 'z'].every(k => Number.isFinite(position[k]))) {
         let loaded = 0
         for (const x of [-8, 0, 8]) for (const z of [-8, 0, 8]) {
@@ -63,18 +66,37 @@ export function enableObservation(bot, report, { now = Date.now, intervalMs = 10
           chunkColumnsLoaded: loaded,
           entityCount: observedEntities.entityCount,
           entitiesObserved: observedEntities.entitiesObserved,
-          // With physics disabled Mineflayer never initializes isInWater.
-          // Report observed block-volume immersion separately without falsely
-          // claiming the combined navigation verdict has passed.
+          // Block-volume immersion is an independent observation. It does not
+          // establish the combined navigation verdict.
           inWater: null,
           blockVolumeInWater: telemetry.observeBlockImmersion(),
-          physicsWaterFlag: 'unavailable_physics_disabled',
           creeperDistanceBlocks: Number.isFinite(observedEntities.creeperDistance)
             ? Math.round(observedEntities.creeperDistance) : null,
           verdict: 'UNKNOWN_STATE'
         }
       }
     } catch { details.verdict = 'STATE_UNAVAILABLE' }
+    const position = bot.entity?.position
+    const valid = guardInstalled && bot.physicsEnabled === true &&
+      position && ['x', 'y', 'z'].every(k => Number.isFinite(position[k]))
+    details.onGround = valid && typeof bot.entity.onGround === 'boolean'
+      ? bot.entity.onGround : null
+    if (valid) {
+      const point = new Vec3(position.x, position.y, position.z)
+      if (!settled && details.onGround === true && previousGrounded &&
+          point.distanceTo(previousGrounded) <= 0.01) settled = point
+      previousGrounded = details.onGround === true ? point : null
+      if (settled) {
+        const displacement = Math.round(point.distanceTo(settled) * 1000)
+        if (Number.isSafeInteger(displacement) && displacement <= 1_000_000) {
+          details.displacementMilliblocks = displacement
+        } else details.displacementMilliblocks = null
+      } else details.displacementMilliblocks = null
+    } else {
+      previousGrounded = null
+      details.displacementMilliblocks = null
+    }
+    if (!bot.physicsEnabled) details.physicsWaterFlag = 'unavailable_physics_disabled'
     report('telemetry_sample', details)
   }
   function onSpawn() {

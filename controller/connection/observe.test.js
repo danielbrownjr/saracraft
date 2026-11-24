@@ -65,6 +65,18 @@ test('stationary samples are sanitized and never issue movement controls', () =>
   observer.dispose()
 })
 
+test('physics-enabled observation keeps navigation unknown without a disabled-physics flag', () => {
+  const { bot, observer, events } = fixture()
+  bot.physicsEnabled = true
+  bot.emit('spawn')
+  const sample = events[0].payload
+  assert.equal(sample.physicsWaterFlag, undefined)
+  assert.equal(sample.inWater, null)
+  assert.equal(sample.blockVolumeInWater, false)
+  assert.equal(sample.verdict, 'UNKNOWN_STATE')
+  observer.dispose()
+})
+
 test('missing air does not hide loaded entities and nearby creeper', () => {
   const { bot, observer, events } = fixture()
   bot.entities[2] = { id: 2, name: 'creeper', position: new Vec3(3.5, 64, 0.5) }
@@ -121,7 +133,7 @@ test('unknown chunk coverage remains fail-closed', () => {
 test('real createBot defers control injection; observe guards after inject_allowed', async () => {
   const bot = mineflayer.createBot({
     username: 'offline_fixture', version: '1.21.11',
-    physicsEnabled: false, disableChatSigning: true,
+    physicsEnabled: true, disableChatSigning: true,
     auth() { /* Do not connect, authenticate, or emit session. */ }
   })
   const observer = enableObservation(bot, () => {})
@@ -134,6 +146,7 @@ test('real createBot defers control injection; observe guards after inject_allow
         resolve()
       })
     })
+    assert.equal(bot.physicsEnabled, true)
     assert.equal(typeof bot.setControlState, 'function')
     assert.throws(() => bot.setControlState('forward', true), /prohibits actuation/)
     assert.throws(() => bot.pathfinder, /prohibits pathfinder access/)
@@ -142,4 +155,69 @@ test('real createBot defers control injection; observe guards after inject_allow
   } finally {
     observer.dispose()
   }
+})
+
+// Pin the actual entrypoint until bot option construction is separately extracted.
+test('production entrypoint enables physics for passive observation', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(new URL('./main.js', import.meta.url), 'utf8')
+  assert.match(source, /mineflayer\.createBot\(\{[\s\S]*?physicsEnabled:\s*walk\s*\|\|\s*observe\s*,/)
+})
+
+test('passive diagnostics establish a fixed grounded baseline and report no coordinates', () => {
+  const { bot, observer, events } = fixture()
+  bot.physicsEnabled = true
+  const sample = () => { observer.sample(); return events.at(-1).payload }
+  try {
+    assert.equal(sample().onGround, null)
+    bot.entity.onGround = false
+    assert.equal(sample().onGround, false)
+    bot.entity.onGround = true
+    assert.equal(sample().displacementMilliblocks, null)
+    assert.equal(sample().displacementMilliblocks, 0)
+    bot.entity.position.x += 2.9
+    assert.equal(sample().displacementMilliblocks, 2900)
+    bot.entity.onGround = false
+    assert.equal(sample().onGround, false)
+    assert.equal(sample().displacementMilliblocks, 2900)
+    bot.entity.position.x = NaN
+    assert.equal(sample().displacementMilliblocks, null)
+    bot.entity.position.x = 0.5
+    assert.equal(sample().displacementMilliblocks, 0)
+    assert.equal(sample().verdict, 'UNKNOWN_STATE')
+    assert.doesNotMatch(JSON.stringify(events), /position|username|uuid|accessToken/i)
+    assert.equal(bot.lastControl, undefined)
+  } finally { observer.dispose() }
+})
+
+test('pinned physics settles a passive player on stable terrain', async () => {
+  const { createRequire } = await import('node:module')
+  const require = createRequire(import.meta.url)
+  const { Physics, PlayerState } = require('prismarine-physics')
+  const mcData = require('minecraft-data')('1.21.11')
+  const Block = require('prismarine-block')('1.21.11')
+  const world = { getBlock(position) {
+    const state = position.y < 0 ? mcData.blocksByName.stone.defaultState : mcData.blocksByName.air.defaultState
+    const block = Block.fromStateId(state, 0)
+    block.position = position.floored()
+    return block
+  } }
+  const physics = Physics(mcData, world)
+  const bot = {
+    version: '1.21.11', registry: mcData,
+    entity: { position: new Vec3(0.5, 1.5, 0.5), velocity: new Vec3(0, 0, 0),
+      onGround: false, isInWater: false, isInLava: false, isInWeb: false,
+      isCollidedHorizontally: false, isCollidedVertically: false, yaw: 0, pitch: 0,
+      effects: {} },
+    inventory: { slots: [] }, jumpTicks: 0, jumpQueued: false, fireworkRocketDuration: 0
+  }
+  const controls = { forward: false, back: false, left: false, right: false,
+    jump: false, sprint: false, sneak: false }
+  const state = new PlayerState(bot, controls)
+  for (let i = 0; i < 40; i++) physics.simulatePlayer(state, world)
+  assert.equal(state.onGround, true)
+  assert.ok(Math.abs(state.pos.y) < 1e-6)
+  const settled = state.pos.clone()
+  for (let i = 0; i < 40; i++) physics.simulatePlayer(state, world)
+  assert.ok(state.pos.distanceTo(settled) < 1e-6)
 })
