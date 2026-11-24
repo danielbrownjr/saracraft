@@ -1,9 +1,38 @@
+import { verify } from 'node:crypto'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const { concat } = require('minecraft-protocol/src/transforms/binaryStream')
 // Paper/vanilla 1.21.11 MessageSignature.Packed encodes cache index + 1.
 // The pinned protocol reader exposes that wire value, while its verifier looks
 // up array indices in a different cache. Supply decoded signatures to the
 // existing verifier; its signature, session and freshness checks still decide.
 const signatureBytes = 256
 const cacheSize = 128
+const logDeltaLimit = 1_000_000n
+
+function boundedDelta(timestamp, wall) {
+  if (timestamp <= 0n) return null
+  const delta = timestamp - wall
+  return Number(delta > logDeltaLimit ? logDeltaLimit : delta < -logDeltaLimit ? -logDeltaLimit : delta)
+}
+
+function signatureProof(packet, session, timestamp, resolved) {
+  if (!resolved || !session?.sessionUuid || !session.publicKey || timestamp <= 0n ||
+      !isSignature(packet.signature) || !Number.isInteger(packet.index) || packet.index < 0) return false
+  const salt = packet.salt?.valueOf()
+  if (typeof salt !== 'bigint') return false
+  try {
+    const previous = packet.previousMessages.map(item => item.signature)
+    const length = Buffer.byteLength(packet.plainMessage, 'utf8')
+    const signed = concat('i32', 1, 'UUID', packet.senderUuid, 'UUID', session.sessionUuid,
+      'i32', packet.index, 'i64', salt, 'i64', timestamp / 1000n, 'i32', length,
+      'pstring', packet.plainMessage, 'i32', previous.length, 'buffer', Buffer.concat(previous))
+    return verify('RSA-SHA256', signed, session.publicKey, packet.signature)
+  } catch {
+    return false
+  }
+}
 const isSignature = value => Buffer.isBuffer(value) && value.length === signatureBytes
 
 export const isCommandCandidate = text => typeof text === 'string' && /^\s*!sara(?:\s|$)/i.test(text)
@@ -47,10 +76,17 @@ export function observeChatWire(client) {
     // ProtoDef decodes i64 as a SignedBigInt wrapper with bigint valueOf().
     const decoded = packet.timestamp?.valueOf()
     const timestamp = typeof decoded === 'bigint' ? decoded : 0n
-    const age = BigInt(Date.now()) - timestamp
     const session = client._players?.[packet.senderUuid]
+    const signatureValidWithoutTime = signatureProof(packet, session, timestamp, synchronized)
+    const chainAllowsIndex = Boolean(session?.hasChainIntegrity === true &&
+      (!session.lastSignature || (isSignature(packet.signature) && session.lastSignature.equals(packet.signature))
+        || packet.index > session.sessionIndex))
+    // Sample immediately before the pinned handler. take() samples immediately
+    // after, bracketing its private Date.now() without altering any clock.
+    const before = BigInt(Date.now())
+    const age = before - timestamp
     observed = {
-      sender: packet.senderUuid, index: packet.globalIndex,
+      sender: packet.senderUuid, index: packet.globalIndex, timestamp,
       flags: {
         wireObserved: true,
         signaturePresent: Boolean(packet.signature),
@@ -61,7 +97,10 @@ export function observeChatWire(client) {
         timestampExpired: timestamp > 0n && age > 420_000n,
         timestampPresent: timestamp > 0n,
         packedReferences,
-        packedSignaturesResolved: synchronized
+        packedSignaturesResolved: synchronized,
+        signatureValidWithoutTime,
+        chainAllowsIndex,
+        signedDeltaBeforeMs: boundedDelta(timestamp, before)
       }
     }
   }
@@ -73,7 +112,7 @@ export function observeChatWire(client) {
       const current = observed
       observed = undefined
       return current && current.sender === packet?.sender && current.index === packet?.globalIndex
-        ? current.flags : {}
+        ? { ...current.flags, signedDeltaAfterMs: boundedDelta(current.timestamp, BigInt(Date.now())) } : {}
     },
     dispose() {
       client.removeListener('player_chat', receive)
