@@ -252,13 +252,12 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   let lastChatIndex = -1
   let commandSequence = 0
   async function playerChat(packet) {
-    const wire = options.chatWire.take(packet)
+    const { allowSupervisedClockSkew, ...wire } = options.chatWire.take(packet)
     if (!isCommandCandidate(packet?.plainMessage)) return
     const command = parseCommand(packet.plainMessage)
     const index = packet.globalIndex
     const indexValid = Number.isSafeInteger(index) && index >= 0
     const checks = {
-      signatureVerified: packet.verified === true,
       encryptedTransport: Boolean(bot._client.cipher),
       commanderMatched: normalizeUuid(packet.sender) === normalizeUuid(commanderUuid),
       commanderInRoster: Object.values(bot.players ?? {}).some(p => normalizeUuid(p.uuid) === normalizeUuid(commanderUuid)),
@@ -267,10 +266,12 @@ function installMovement(bot, commanderUuid, report, options = {}) {
       indexFresh: indexValid && index > lastChatIndex,
       commandParsed: movementCommands.has(command?.kind)
     }
+    const signatureVerified = packet.verified === true
+    const signatureAccepted = signatureVerified || (policy === 'supervised-dry' && allowSupervisedClockSkew === true)
     const envelope = commandEnvelope({ sender: packet.sender, plainMessage: packet.plainMessage,
-      authenticated: Object.values(checks).every(Boolean) && wire.packedSignaturesResolved !== false }, commanderUuid)
+      authenticated: signatureAccepted && Object.values(checks).every(Boolean) && wire.packedSignaturesResolved !== false }, commanderUuid)
     if (!envelope) {
-      report('movement_ignored', { ...checks, ...wire })
+      report('movement_ignored', { signatureVerified, ...checks, ...wire })
       return
     }
     lastChatIndex = index
