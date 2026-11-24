@@ -156,3 +156,10 @@ test('real createBot defers control injection; observe guards after inject_allow
     observer.dispose()
   }
 })
+
+// Pin the actual entrypoint until bot option construction is separately extracted.
+test('production entrypoint enables physics for passive observation', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(new URL('./main.js', import.meta.url), 'utf8')
+  assert.match(source, /mineflayer\.createBot\(\{[\s\S]*?physicsEnabled:\s*walk\s*\|\|\s*observe\s*,/)
+})
