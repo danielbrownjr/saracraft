@@ -5,6 +5,8 @@ This file must be owned by root and not writable by the developer or bot.
 The service and its root-controlled release must be installed separately.
 """
 import fcntl
+import pwd
+import stat
 import json
 import os
 from pathlib import Path
@@ -14,7 +16,10 @@ import sys
 
 UNIT = "saracraft-bot.service"
 SYSTEMCTL = "/usr/bin/systemctl"
-JOURNALCTL = "/usr/bin/journalctl"
+PRIVATE_LOG = Path("/var/log/saracraft-bot/verification.jsonl")
+PRIVATE_LOG_DIR = PRIVATE_LOG.parent
+BOT_USER = "saracraft-bot"
+MAX_LOG_BYTES = 256 * 1024
 CONTROL_DIR = Path("/var/lib/saracraft-control")
 LOCK = CONTROL_DIR / "operations.lock"
 INHIBIT = CONTROL_DIR / "inhibit"
@@ -56,6 +61,33 @@ def unit_state():
         raise RuntimeError("Unable to determine restricted bot service state")
     return state
 
+STATUS_FIELDS = ("ActiveState", "Result", "ConditionResult", "ExecMainStatus")
+STATUS_VALUES = {
+    "ActiveState": re.compile(r"^(inactive|active|activating|deactivating|failed|reloading)$"),
+    "Result": re.compile(r"^(success|exit-code|signal|core-dump|timeout|watchdog|start-limit-hit|resources|protocol|oom-kill|condition|assert|dependency|clean|skip|)$"),
+    "ConditionResult": re.compile(r"^(yes|no|)$"),
+    "ExecMainStatus": re.compile(r"^[0-9]{0,5}$"),
+}
+
+def unit_details():
+    # Fixed properties only; do not pass through arbitrary systemctl output.
+    command = [SYSTEMCTL, "show", UNIT, "--property=" + ",".join(STATUS_FIELDS), "--no-pager"]
+    result = run(command)
+    if result.returncode:
+        raise RuntimeError("Unable to determine restricted bot unit result")
+    entries = {}
+    for line in result.stdout.splitlines():
+        if "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        if name in STATUS_VALUES and STATUS_VALUES[name].fullmatch(value):
+            if name in entries:
+                raise RuntimeError("Duplicate unit status property")
+            entries[name] = value
+    if set(entries) != set(STATUS_FIELDS):
+        raise RuntimeError("Missing or invalid unit status properties")
+    return {name: entries[name] for name in STATUS_FIELDS}
+
 def sanitize(entry):
     """Never forward raw journal text, unrecognized events or extra keys."""
     if not isinstance(entry, dict) or set(entry) - ({"time", "run", "event"} | set(SAFE_EVENT.get(entry.get("event"), ()))):
@@ -91,17 +123,52 @@ def sanitize(entry):
         result[name] = value
     return result
 
+def read_private_log_lines():
+    # Root-only fixed-path reader. Never fall back to journald or caller paths.
+    try:
+        bot_uid = pwd.getpwnam(BOT_USER).pw_uid
+    except KeyError as error:
+        raise RuntimeError("Bot account missing") from error
+    directory_fd = os.open(PRIVATE_LOG_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        directory = os.fstat(directory_fd)
+        if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != bot_uid or (directory.st_mode & 0o077) != 0:
+            raise RuntimeError('Private log directory ownership or permissions are unsafe')
+        descriptor = os.open(PRIVATE_LOG.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=directory_fd)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != bot_uid or info.st_nlink != 1 or (info.st_mode & 0o077) != 0:
+                raise RuntimeError('Private log file ownership or permissions are unsafe')
+            length = min(info.st_size, MAX_LOG_BYTES)
+            start = max(0, info.st_size - length)
+            os.lseek(descriptor, start, os.SEEK_SET)
+            data = bytearray()
+            while len(data) < length:
+                chunk = os.read(descriptor, min(8192, length - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+            if start:
+                # Discard the initial fragment, retaining complete trailing lines.
+                first_newline = data.find(b"\n")
+                data = data[first_newline + 1:] if first_newline >= 0 else bytearray()
+            return bytes(data).decode("utf-8", errors="replace").splitlines()
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(directory_fd)
+
 def public_logs():
-    result = run([JOURNALCTL, "--no-pager", "--output=cat", "-u", UNIT, "-n", "150"])
-    if result.returncode: raise RuntimeError("Sanitized logs unavailable")
     entries = []
-    for line in result.stdout.splitlines():
-        if len(line) > 4096: continue
+    for line in read_private_log_lines():
+        if len(line) > 4096:
+            continue
         try:
             safe = sanitize(json.loads(line))
         except (ValueError, TypeError, RecursionError):
             continue
-        if safe is not None: entries.append(safe)
+        if safe is not None:
+            entries.append(safe)
     for entry in entries[-100:]:
         print(json.dumps(entry, separators=(",", ":"), sort_keys=True))
 
@@ -168,7 +235,12 @@ def control(operation):
     # Read-only operations never wait on the start/clear lock.
     if operation == "status":
         validate_control_directory()
-        print(json.dumps({"state": unit_state(), "emergency_inhibit": INHIBIT.exists()}, sort_keys=True))
+        details = unit_details()
+        print(json.dumps({"state": details["ActiveState"],
+                          "result": details["Result"],
+                          "condition_result": details["ConditionResult"],
+                          "exec_main_status": int(details["ExecMainStatus"]) if details["ExecMainStatus"] else None,
+                          "emergency_inhibit": INHIBIT.exists()}, sort_keys=True))
         return 0
     if operation == "logs":
         public_logs()

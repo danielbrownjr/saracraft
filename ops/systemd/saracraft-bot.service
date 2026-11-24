@@ -1,4 +1,5 @@
 # TEMPLATE ONLY. Do not install before release, account and privilege review.
+# Discard raw stdout/stderr; privileged operator tool reads fixed private JSONL.
 # Root-controlled /opt/saracraft/releases/current must be immutable to daniel and saracraft-bot.
 # /var/lib/saracraft-bot/auth and cache must be owned by saracraft-bot, mode 0700.
 # /var/lib/saracraft-control must be root-owned mode 0700.
@@ -15,6 +16,8 @@ User=saracraft-bot
 Group=saracraft-bot
 WorkingDirectory=/opt/saracraft/releases/current/controller/connection
 ExecStart=/usr/bin/node /opt/saracraft/releases/current/controller/connection/main.js --observe
+StandardOutput=null
+StandardError=null
 Environment=SARACRAFT_EVIDENCE_PATH=/var/log/saracraft-bot/verification.jsonl
 Restart=no
 RuntimeMaxSec=180
