@@ -97,3 +97,38 @@ Movement mode requests signed-chat certificates, enables physics, and attaches t
 `verifyConnection`'s optional `onClosing(bot)` callback must synchronously cancel and clear ordinary movement; it is not an asynchronous settlement hook. Its acknowledgement does not establish observed in-world cessation. Failed shutdown and close-deadline expiration report failure.
 
 This source integration is verified with offline mocks only. Running either launcher mode authenticates and contacts Minecraft and requires separate authorization. M0.8 implementation work does not authorize installation, login, connection or gameplay. In particular, underwater escape, actual STOP latency and explosion avoidance are not proven by these tests.
+
+### Passive observation acceptance
+
+Observation permits gravity, collisions and external forces; it is not a
+frozen or invulnerable player. Use a dry enclosed cell with continuous
+human visual oversight. No deliberate locomotion is authorized.
+The physics water flag is omitted when physics is enabled; `inWater`
+remains null and block-volume immersion is independent diagnostic evidence.
+
+`onGround` is the local physics flag (true/false), or null when unavailable.
+`displacementMilliblocks` is rounded scalar displacement from a fixed
+baseline established by two consecutive grounded samples within 0.01
+blocks; null means unavailable, not zero. No coordinates are emitted.
+These diagnostics do not authorize movement or trigger automatic control.
+A baseline is not proof of server-side stationarity; visual oversight remains required.
+
+Before promotion, install and verify the matching reviewed log sanitizer
+with the runtime; older helpers reject samples with the new fields.
+Preserve the previous helper for rollback as well as the previous release.
+
+Accept one connection attempt, 150 seconds of observation, normal exit,
+no flying/invalid-move kick, at least 140 telemetry samples, no gap over
+3 seconds, all verdicts UNKNOWN_STATE, no guard/pathfinder errors, settling
+within approximately 2 seconds and no unexpected displacement, damage or death.
+Stop on kick, unexpected motion, damage, hostile mob, gap over 5 seconds,
+guard error or lost oversight. Restore inhibit, verify unit inactive,
+account absent and server healthy.
+
+Collect overlapping sanitized `saracraftctl logs` snapshots periodically
+(e.g. every 30 seconds and at exit), because the helper returns at most
+100 records. Deduplicate identical overlapping records within the trial time
+window; record missing coverage as a failure, not fabricated samples.
+Archive the sanitized trial evidence with exact runtime/helper hashes,
+timestamps, counts, gaps, operator observations, termination and final state.
+Do not archive raw private logs, credentials or absolute coordinates.
