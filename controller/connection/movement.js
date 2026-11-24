@@ -31,10 +31,12 @@ export function commandReply(kind, result) {
 function installMovement(bot, commanderUuid, report, options = {}) {
   const output = report
   report = (...args) => { try { output(...args) } catch {} }
+  const policy = options.policy ?? 'strict'
+  if (!['strict', 'supervised-dry'].includes(policy)) throw new RangeError('invalid navigation policy')
   const now = options.now ?? Date.now
   const cadenceMs = options.cadenceMs ?? 100
   if (!Number.isFinite(cadenceMs) || cadenceMs <= 0 || cadenceMs > 100) throw new RangeError('invalid movement cadence')
-  const telemetry = options.telemetry ?? createTelemetry(bot, { now })
+  const telemetry = options.telemetry ?? createTelemetry(bot, { now, policy })
   bot.loadPlugin(plugin)
   const movements = options.movements ?? new Movements(bot)
   Object.assign(movements, { canDig: false, canOpenDoors: false, allow1by1towers: false,
@@ -103,7 +105,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
     let snapshot
     try { snapshot = read(task) } catch { snapshot = null }
     let verdict
-    try { verdict = assessNavigation(snapshot, { now: now(), maxAgeMs: 1000 }) }
+    try { verdict = assessNavigation(snapshot, { now: now(), maxAgeMs: 1000, policy }) }
     catch { verdict = { safe: false, reason: 'STATE_UNAVAILABLE' }; snapshot = null }
     if (!verdict.safe) { rejectMovement(task, snapshot, verdict.reason); return false }
     // Final synchronous R2 boundary: no promise, await or event emission follows
@@ -171,7 +173,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
       task.finish = finish
       const onAbort = () => finish(false, signal.reason?.message ?? 'CANCELLED')
       task.monitor = new NavigationSafetyMonitor({ readState: () => read(task),
-        halt: () => taskHalt(task), now,
+        halt: () => taskHalt(task), now, policy,
         readTimeoutMs: options.readTimeoutMs ?? 400, haltTimeoutMs: options.haltTimeoutMs ?? 1000 })
       signal.addEventListener('abort', onAbort, { once: true })
       task.timer = setInterval(() => { void check(task) }, cadenceMs)
@@ -183,7 +185,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
           // it never authorizes a goal or stands in for a proposed route step.
           const current = telemetry.readState(start)
           if (current?.inWater === true) {
-            const verdict = assessNavigation(current, { now: now(), maxAgeMs: 1000 })
+            const verdict = assessNavigation(current, { now: now(), maxAgeMs: 1000, policy })
             if (!verdict.safe) { rejectMovement(task, current, verdict.reason); return }
           }
           // Public generator avoids getPathTo's mutation of pathfinder's active A*.
@@ -295,6 +297,8 @@ function installMovement(bot, commanderUuid, report, options = {}) {
     bot.removeListener('path_update', pathUpdate); bot.removeListener('path_reset', pathReset)
     bot.removeListener('physicsTick', tick); bot.removeListener('goal_reached', goalReached)
     options.signal?.removeEventListener('abort', shutdown)
+    bot.removeListener('death', shutdown)
+    bot.removeListener('respawn', shutdown)
     telemetry.dispose()
     // Keep the synchronous guard installed: callbacks already queued by a plugin
     // must not regain access to ordinary controls after disconnect/disposal.
@@ -305,6 +309,10 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   const onPlayerChat = packet => { void playerChat(packet).catch(() => shutdown()) }
   bot._client.on('playerChat', onPlayerChat)
   bot.once('end', end)
+  if (policy === 'supervised-dry') {
+    bot.once('death', shutdown)
+    bot.once('respawn', shutdown)
+  }
   options.signal?.addEventListener('abort', shutdown, { once: true })
   if (options.signal?.aborted) shutdown()
   halt.controller = controller
@@ -315,7 +323,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
 // Mineflayer createBot returns before plugins/registry/entity finish loading.
 // Observe protocol metadata immediately, initialize pathfinder only after spawn.
 export function enableMovement(bot, commanderUuid, report, options = {}) {
-  const telemetry = options.telemetry ?? createTelemetry(bot, { now: options.now ?? Date.now })
+  const telemetry = options.telemetry ?? createTelemetry(bot, { now: options.now ?? Date.now, policy: options.policy ?? 'strict' })
   let installed
   let closing = false
   const initialize = () => {
