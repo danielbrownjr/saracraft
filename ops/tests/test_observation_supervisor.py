@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
 import json
+import signal
 import unittest
 from unittest.mock import patch
 
-from ops.observation.supervisor import RestrictedOperations, State, observe
+from ops.observation.supervisor import RestrictedOperations, State, observe, evaluate_acceptance
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 LAUNCH = 2.25
@@ -60,7 +61,18 @@ class SimulatedOperations:
             if self.failure == "telemetry_gap" and tick >= 5:
                 continue
             distance = 251 if self.failure == "hazard" and tick >= 5 else 0
-            row = line(tick, "telemetry_sample", onGround=True, displacementMilliblocks=distance)
+            if self.failure == "sparse" and tick % 4:
+                continue
+            if self.failure == "drift" and tick >= 5:
+                distance = 200
+            if self.failure == "null" and tick >= 5:
+                distance = None
+            grounded = self.failure != "never_grounded" and not (self.failure == "lost_ground" and tick >= 5)
+            if self.failure == "never_grounded":
+                distance = None
+            verdict = "STATE_UNAVAILABLE" if self.failure == "unavailable" and tick >= 5 else "UNKNOWN_STATE"
+            row = line(tick, "telemetry_sample", onGround=grounded,
+                       displacementMilliblocks=distance, verdict=verdict)
             records.extend([row, row])
             if tick % 5 == 0:
                 records.append(line(tick, "heartbeat"))
@@ -84,6 +96,8 @@ class SupervisorTests(unittest.TestCase):
         ops = SimulatedOperations()
         result = ops.run()
         self.assertEqual(result["outcome"], "normal")
+        self.assertEqual(result["acceptance"]["automated_acceptance"], "pass")
+        self.assertEqual(result["acceptance"]["operator_acceptance"], "pending")
         self.assertTrue(result["termination_verified"])
         self.assertEqual(ops.stops, 1)
         self.assertEqual(ops.highest_window, 100)
@@ -149,3 +163,48 @@ class SupervisorTests(unittest.TestCase):
             ("/usr/local/bin/saracraftctl", "logs"),
             ("/usr/local/bin/saracraftctl", "estop"),
         ])
+
+    def test_failed_acceptance_cannot_pass_despite_normal_execution(self):
+        for failure, criterion in (("sparse", "minimum_samples"),
+                                   ("drift", "post_baseline_state"),
+                                   ("never_grounded", "grounding_within_3s")):
+            with self.subTest(failure=failure):
+                result = SimulatedOperations(failure=failure).run()
+                self.assertEqual(result["acceptance"]["automated_acceptance"], "fail")
+                self.assertFalse(result["acceptance"]["criteria"][criterion])
+
+    def test_post_baseline_invalid_state_stops(self):
+        for failure in ("null", "lost_ground", "unavailable"):
+            with self.subTest(failure=failure):
+                ops = SimulatedOperations(failure=failure)
+                result = ops.run()
+                self.assertEqual(result["reason"], "post_baseline_state_unavailable")
+                self.assertEqual(result["acceptance"]["automated_acceptance"], "fail")
+                self.assertTrue(result["termination_verified"])
+
+    def test_repeated_interrupt_during_stop_preserves_evidence(self):
+        ops = SimulatedOperations(failure="interrupt")
+        original = ops.estop
+        def stop():
+            self.assertEqual(signal.getsignal(signal.SIGINT), signal.SIG_IGN)
+            self.assertEqual(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
+            signal.raise_signal(signal.SIGINT)
+            signal.raise_signal(signal.SIGTERM)
+            original()
+            raise KeyboardInterrupt
+        ops.estop = stop
+        previous = signal.getsignal(signal.SIGINT)
+        result = ops.run()
+        self.assertEqual(signal.getsignal(signal.SIGINT), previous)
+        self.assertTrue(result["estop_request_failed"])
+        self.assertTrue(result["termination_verified"])
+        self.assertIn("events_retained", result["evidence"])
+        self.assertEqual(result["acceptance"]["automated_acceptance"], "fail")
+
+    def test_adapter_uses_separate_stop_timeout_and_sessions(self):
+        with patch("subprocess.check_output", return_value="") as execute:
+            ops = RestrictedOperations()
+            ops.logs()
+            ops.estop()
+        self.assertEqual([call.kwargs["timeout"] for call in execute.call_args_list], [2, 15])
+        self.assertTrue(all(call.kwargs["start_new_session"] for call in execute.call_args_list))
