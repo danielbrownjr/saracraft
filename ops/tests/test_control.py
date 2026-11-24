@@ -336,6 +336,30 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(visible["condition_result"], "yes")
         self.assertNotIn("Description", visible)
 
+    def test_observe_launch_checks_effective_command_and_refuses_walk(self):
+        node, entry = priv.OBSERVE_NODE, priv.OBSERVE_ENTRY
+        observe = f"{{ path={node} ; argv[]={node} {entry} --observe ; ignore_errors=no ; }}"
+        for command, allowed in [(observe, True),
+                                 (observe.replace("--observe", "--walk-supervised"), False),
+                                 (observe.replace("--observe", "--observe --walk-supervised"), False),
+                                 (observe + " " + observe, False),
+                                 ("", False)]:
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                launch = result(stdout=command)
+                with mock.patch.object(priv, "LOCK", path / "lock"), \
+                     mock.patch.object(priv, "INHIBIT", path / "inhibit"), \
+                     mock.patch.object(priv, "unit_state", return_value="inactive"), \
+                     mock.patch.object(priv, "validate_control_directory"), \
+                     mock.patch.object(priv, "run", side_effect=[launch, result()]) as run:
+                    if allowed:
+                        self.assertEqual(priv.control("start-observe"), 0)
+                        self.assertEqual(run.call_count, 2)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "fixed observation"):
+                            priv.control("start-observe")
+                        run.assert_called_once()
+
     def test_operations_single_unit_and_persistent_estop(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)
@@ -343,6 +367,7 @@ class BackendTests(unittest.TestCase):
                  mock.patch.object(priv, "LOCK", path / "operations.lock"), \
                  mock.patch.object(priv, "INHIBIT", path / "inhibit"), \
                  mock.patch.object(priv, "unit_state", return_value="inactive"), \
+                 mock.patch.object(priv, "require_observation_start"), \
                  mock.patch.object(priv, "validate_control_directory"), \
                  mock.patch.object(priv, "run", return_value=result()) as cmd, \
                  mock.patch.object(priv.os, "geteuid", return_value=0), \

@@ -3,13 +3,15 @@ import { Vec3 } from 'vec3'
 
 const finitePosition = p => p && ['x', 'y', 'z'].every(k => Number.isFinite(p[k]))
 export function isWater(block) {
-  return block?.name === 'water' || block?.getProperties?.().waterlogged === true
+  return block?.name === 'water' || block?.name === 'bubble_column' || block?.getProperties?.().waterlogged === true
 }
 
 // Subscribe before movement. A cached/default oxygenLevel is deliberately never
 // accepted: it is rounded to 0..20 by Mineflayer. Raw air must be witnessed in an
 // entity_metadata packet and ages out independently of subsequent local reads.
-export function createTelemetry(bot, { now = Date.now, maxAgeMs = 1000 } = {}) {
+export function createTelemetry(bot, { now = Date.now, maxAgeMs = 1000, policy = 'strict' } = {}) {
+  if (!['strict', 'supervised-dry'].includes(policy)) throw new RangeError('invalid navigation policy')
+  const supervised = policy === 'supervised-dry'
   let air
   let airPacketCount = 0
   let airObservedAt
@@ -46,7 +48,7 @@ export function createTelemetry(bot, { now = Date.now, maxAgeMs = 1000 } = {}) {
           if (!block || typeof block.name !== 'string' || typeof block.getProperties !== 'function') return null
           const properties = block.getProperties()
           if (!properties || typeof properties !== 'object') return null
-          result.push(block.name === 'water' || properties.waterlogged === true)
+          result.push(block.name === 'water' || (supervised && block.name === 'bubble_column') || properties.waterlogged === true)
         }
       }
     }
@@ -87,7 +89,7 @@ export function createTelemetry(bot, { now = Date.now, maxAgeMs = 1000 } = {}) {
     if (ended || !finitePosition(position) || !finitePosition(nextStep) ||
         !Number.isFinite(width) || width <= 0 || width > 2 ||
         !Number.isFinite(height) || height <= 0 || height > 3 ||
-        !Number.isFinite(airObservedAt) || airObservedAt > sampledAt || sampledAt - airObservedAt > maxAgeMs) return unknown
+        (!supervised && (!Number.isFinite(airObservedAt) || airObservedAt > sampledAt || sampledAt - airObservedAt > maxAgeMs))) return unknown
     const immersed = volume(position, width, height, false)
     // Physics may already have detected water before a block notification. Either
     // positive is sufficient; unavailable physics state cannot certify dry land.

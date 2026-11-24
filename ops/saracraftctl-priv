@@ -61,6 +61,22 @@ def unit_state():
         raise RuntimeError("Unable to determine restricted bot service state")
     return state
 
+OBSERVE_NODE = "/opt/saracraft/runtimes/node-v22.23.5-linux-x64/bin/node"
+OBSERVE_ENTRY = "/opt/saracraft/releases/current/controller/connection/main.js"
+
+
+def require_observation_start():
+    result = run([SYSTEMCTL, "show", UNIT, "--property=ExecStart", "--value"])
+    prefix = f"{{ path={OBSERVE_NODE} ; argv[]={OBSERVE_NODE} {OBSERVE_ENTRY} --observe ; "
+    value = result.stdout.strip()
+    # Require exactly one fixed execution command. Status and stop verbs do
+    # not depend on this property and remain available in administrator mode.
+    if (result.returncode or not value.startswith(prefix) or not value.endswith(" }")
+            or any(c in value[len(prefix):-2] for c in "{}\n")
+            or value.count("argv[]=") != 1):
+        raise RuntimeError("Restricted start requires the fixed observation service command")
+
+
 STATUS_FIELDS = ("ActiveState", "Result", "ConditionResult", "ExecMainStatus")
 STATUS_VALUES = {
     "ActiveState": re.compile(r"^(inactive|active|activating|deactivating|failed|reloading)$"),
@@ -255,6 +271,7 @@ def control(operation):
                 raise RuntimeError("Emergency inhibit active; privileged clearance required")
             if unit_state() not in ("inactive", "failed"):
                 raise RuntimeError("SaraCraft already running or starting")
+            require_observation_start()
             result = run([SYSTEMCTL, "start", "--no-block", UNIT])
             if result.returncode:
                 raise RuntimeError("Restricted service start request failed")

@@ -132,3 +132,20 @@ window; record missing coverage as a failure, not fabricated samples.
 Archive the sanitized trial evidence with exact runtime/helper hashes,
 timestamps, counts, gaps, operator observations, termination and final state.
 Do not archive raw private logs, credentials or absolute coordinates.
+
+### Attended host launch for supervised walking
+
+For a separately authorized session, an administrator may select `--walk-supervised`
+with a temporary root-controlled drop-in on the existing bot unit. Set
+`SARACRAFT_COMMANDER_UUID` from the online-mode server's authenticated profile
+evidence and operator confirmation. Preserve the existing inhibit, unit limits,
+bot identity, and independent emergency stop. Confirm the effective command before
+an authorized administrator starts the unit directly. The restricted
+`saracraftctl start observe` refuses to start a differently configured command.
+
+Use ordinary in-game chat with `!sara follow`, `!sara stop`, and `!sara come`.
+The client requires a verified signed player-chat event from the configured
+profile. Check actual motion and cessation in-game; a STOP acknowledgement
+reports that the goal and controls were cleared. Keep `saracraftctl estop`
+available separately. After the session ends, restore inhibit, verify the
+process and group are gone, and remove the temporary mode drop-in.
