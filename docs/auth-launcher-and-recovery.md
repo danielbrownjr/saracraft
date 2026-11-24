@@ -1,6 +1,6 @@
 # SaraCraft authentication-only launcher and private recovery (SOURCE CANDIDATE)
 
-**Status:** Source only, not installed or executed on Hephaestus. The accepted
+**Status (2026-11-24):** Source merged to `main`, not known to be installed or executed as the real auth launcher on Hephaestus. Credential-free synthetic host acceptance passed at `407a1d8`; trusted promotion and real sign-in are separately gated. The accepted
 PR #9 provisioner is stacked on PR #8. This document and
 `ops/auth/saracraft-auth-launch` are candidates for a separate security review.
 No host changes, identity provisioning, Microsoft sign-in, Minecraft connection,
