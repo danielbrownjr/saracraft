@@ -60,7 +60,9 @@ test('requires spawn, chunk and player presence, then waits for clean end', asyn
   assert.equal(result, true)
   assert.equal(attempts, 1)
   assert.equal(quits, 1)
-  assert.deepEqual(events.map(e => e.event),
+  // Heartbeats may interleave with lifecycle milestones under runner load.
+  // A separate test asserts heartbeat emission; only order milestones here.
+  assert.deepEqual(events.map(e => e.event).filter(e => e !== 'heartbeat'),
     ['connecting', 'login', 'player_presence', 'spawn', 'world_received', 'disconnected'])
 })
 
