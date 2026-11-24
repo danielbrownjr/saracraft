@@ -1,11 +1,15 @@
 // Source-only safety gate. Telemetry must come from a fresh, complete world snapshot.
-export function assessNavigation(snapshot, { now = Date.now(), maxAgeMs = 1000 } = {}) {
+export function assessNavigation(snapshot, { now = Date.now(), maxAgeMs = 1000, policy = 'strict' } = {}) {
+  if (!['strict', 'supervised-dry'].includes(policy)) return { safe: false, reason: 'UNKNOWN_STATE' };
+  const supervised = policy === 'supervised-dry';
   if (!snapshot || typeof snapshot !== 'object') return { safe: false, reason: 'UNKNOWN_STATE' };
-  const { air, inWater, nextStepInWater, creeperDistance, entitiesObserved, observedAt } = snapshot;
+  const { air, inWater, nextStepInWater, creeperDistance, entitiesObserved } = snapshot;
+  const observedAt = supervised ? snapshot.sampledAt : snapshot.observedAt;
   if (!Number.isFinite(now) || !Number.isFinite(maxAgeMs) || maxAgeMs < 0 ||
       !Number.isFinite(observedAt) || observedAt > now || now - observedAt > maxAgeMs ||
       typeof inWater !== 'boolean' || typeof nextStepInWater !== 'boolean' ||
-      entitiesObserved !== true || !Number.isInteger(air) || air < 0 || air > 300 ||
+      entitiesObserved !== true ||
+      ((!supervised || air !== undefined) && (!Number.isInteger(air) || air < 0 || air > 300)) ||
       !(creeperDistance === null ||
         (typeof creeperDistance === 'number' && Number.isFinite(creeperDistance) && creeperDistance >= 0))) {
     return { safe: false, reason: 'UNKNOWN_STATE' };
@@ -13,7 +17,7 @@ export function assessNavigation(snapshot, { now = Date.now(), maxAgeMs = 1000 }
   // Already in water is an emergency requiring an adapter-provided escape.
   // Halting alone is not a safe submerged recovery.
   if (inWater) return { safe: false, reason: 'WATER_EXIT_REQUIRED', action: 'surface' };
-  if (air < 100) return { safe: false, reason: 'LOW_AIR' };
+  if (air !== undefined && air < 100) return { safe: false, reason: 'LOW_AIR' };
   if (nextStepInWater) return { safe: false, reason: 'WATER_UNSAFE' };
   if (creeperDistance !== null && creeperDistance <= 6) {
     return { safe: false, reason: 'CREEPER_NEARBY' };
@@ -32,9 +36,10 @@ export class NavigationSafetyMonitor {
   #haltTimeoutMs;
   #maxAgeMs;
   #now;
+  #policy;
 
   constructor({ readState, halt, readTimeoutMs = 400, haltTimeoutMs = 1000,
-    maxAgeMs = 1000, now = Date.now }) {
+    maxAgeMs = 1000, now = Date.now, policy = 'strict' }) {
     if (typeof readState !== 'function' || typeof halt !== 'function' || typeof now !== 'function') {
       throw new TypeError('readState, halt and now functions are required');
     }
@@ -47,6 +52,8 @@ export class NavigationSafetyMonitor {
     this.#readTimeoutMs = readTimeoutMs;
     this.#haltTimeoutMs = haltTimeoutMs;
     this.#maxAgeMs = maxAgeMs;
+    if (!['strict', 'supervised-dry'].includes(policy)) throw new RangeError('invalid navigation policy');
+    this.#policy = policy;
     this.#now = now;
   }
 
@@ -75,7 +82,7 @@ export class NavigationSafetyMonitor {
       // Snapshot accessors and the injected clock can throw during disconnects.
       // Treat evaluation failure like a failed read so check() trips and halts.
       try {
-        return assessNavigation(result.value, { now: this.#now(), maxAgeMs: this.#maxAgeMs });
+        return assessNavigation(result.value, { now: this.#now(), maxAgeMs: this.#maxAgeMs, policy: this.#policy });
       } catch {
         return { safe: false, reason: 'STATE_UNAVAILABLE' };
       }
