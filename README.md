@@ -1,5 +1,7 @@
 # SaraCraft
 
+![SaraCraft banner featuring a pixel-art engineer in a Minecraft-inspired workshop](branding/saracraft-project-banner.png)
+
 A private Minecraft Java AI companion project for cooperative survival.
 
 **Status (2026-11-24): Wave 1 source PRs #5–#11 merged to `main`.** Navigation, observation-control, packaging and attended authentication-only source are reviewed; this does not install, activate, authenticate or permit Minecraft gameplay. The credential-free host acceptance gate passed for source `407a1d8`, while trusted-manifest promotion and real sign-in require separate authorization. See [M0.8 integration](docs/m0-8-integration.md), [source reconciliation](docs/m0-8-reconciliation.md), and [auth packaging/host acceptance](docs/auth-packaging-and-host-acceptance.md).
