@@ -1,8 +1,8 @@
-# SaraCraft Stage 2 installation candidate (NOT approved or installed)
+# SaraCraft Stage 2 installation candidate (historical source design and host gates)
 
-**Base:** draft PR #7 `6844ac8bc2d1c8f09cab5957873c64f20fbbc1b6`, independently accepted on previous scope.
+**Base (historical):** PR #7 `6844ac8bc2d1c8f09cab5957873c64f20fbbc1b6`, independently accepted on previous scope.
 **Host evidence:** Hephaestus preflight of November 23, 2026, including authorized ownership-only metadata checks.
-**Status:** source candidate only. No accounts, files, services, permissions, processes, tokens or Minecraft connections have been changed by this task.
+**Status (2026-11-24):** PR #8 is merged to `main`. Stage 2 release `50a2159` was subsequently installed and verified on Hephaestus according to the 2026-11-23 host acceptance report; this document retains the earlier candidate-stage facts for historical context. Current host state has not been rechecked since the source merges. PR #11 (`407a1d8`) passed synthetic credential-free host acceptance but is not known to be promoted. The emergency inhibit remains mandatory and no live authentication or gameplay is authorized.
 
 ## Approved source-level trust and logging decisions (2026-11-23)
 
