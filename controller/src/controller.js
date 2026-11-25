@@ -1,7 +1,7 @@
 import { parseCommand, validateEnvelope, UUID_RE } from './commands.js';
 
 const LIMITS = Object.freeze({ followMs: 60_000, comeHereMs: 30_000, gatherMs: 90_000, returnMs: 30_000,
-  haltMs: 1_000, stopWaitMs: 5_000 });
+  statusMs: 2_000, lookMs: 5_000, collectMs: 20_000, haltMs: 1_000, stopWaitMs: 5_000 });
 
 // Bound caller-owned promises without trusting them to cooperate with cancellation.
 // The original promises retain rejection handlers even after the deadline wins.
@@ -106,6 +106,9 @@ export class SaraController {
     let execution;
     try {
       switch (command.kind) {
+        case 'status': execution = this.#adapter.status?.(this.#commander, options); break;
+        case 'look': execution = this.#adapter.look?.(this.#commander, options); break;
+        case 'collect': execution = this.#adapter.collect?.(this.#commander, options); break;
         case 'follow': execution = this.#adapter.follow(this.#commander, options); break;
         case 'comeHere': execution = this.#adapter.comeHere?.(this.#commander, options); break;
         case 'gather': execution = this.#adapter.gather(command.block, command.count, { ...options, radiusMax: 48 }); break;
