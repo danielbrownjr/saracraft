@@ -10,8 +10,8 @@ const uuid = '00000000-0000-4000-8000-000000000001'
 const envelope = text => ({ source: 'authenticated_player_chat', senderUuid: uuid, identityVerified: true, text })
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve() }
 const dry = () => ({ air: 300, inWater: false, nextStepInWater: false, entitiesObserved: true,
-  creeperDistance: null, observedAt: Date.now() })
-function fixture({ readState = dry, report, limits = {}, preplan } = {}) {
+  creeperDistance: null, sampledAt: Date.now(), observedAt: Date.now() })
+function fixture({ readState = dry, report, limits = {}, preplan, policy } = {}) {
   const bot = new EventEmitter()
   bot._client = new EventEmitter(); bot._client.cipher = {}
   bot.entity = { id: 1, position: new Vec3(0.5, 1, 0.5), velocity: new Vec3(0, 0, 0), onGround: true, isInWater: false }
@@ -40,7 +40,7 @@ function fixture({ readState = dry, report, limits = {}, preplan } = {}) {
   const movements = { blocksToAvoid: new Set(), exclusionAreasStep: [] }
   const shutdown = new AbortController()
   const halt = enableMovement(bot, uuid, report ?? ((event, detail) => reports.push({ event, ...detail })), {
-    telemetry: { readState, dispose() {} }, movements, signal: shutdown.signal,
+    policy, telemetry: { readState, dispose() {} }, movements, signal: shutdown.signal,
     controllerOptions: { limits: { haltMs: 20, stopWaitMs: 20, ...limits } }, readTimeoutMs: 10, haltTimeoutMs: 10
   })
   return { bot, acts, reports, halt, controller: halt.controller, shutdown,
@@ -294,87 +294,110 @@ test('throwing telemetry preserves STATE_UNAVAILABLE in controller and monitor r
   await f.close()
 })
 
-test('Paper wire cache references verify without weakening signed STOP or replay gating', async () => {
-  const require = createRequire(import.meta.url)
-  const { createSerializer, createDeserializer, states } = require('minecraft-protocol')
-  const installChat = require('minecraft-protocol/src/client/chat')
-  const { concat } = require('minecraft-protocol/src/transforms/binaryStream')
-  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
-  const session = '00000000-0000-4000-8000-000000000002'
-  const keyBytes = publicKey.export({ format: 'der', type: 'spki' })
-  const version = '1.21.11'
-  const writer = createSerializer({ state: states.PLAY, version, isServer: true })
-  const reader = createDeserializer({ state: states.PLAY, version })
-  const f = fixture()
-  const uncorrected = new EventEmitter()
-  for (const client of [f.bot._client, uncorrected]) {
-    client.version = version
-    client.write = () => {}
-    installChat(client, {})
-    client.emit('player_info', { data: [{ uuid, chatSession: {
-      uuid: session, publicKey: { keyBytes }
-    } }] })
-  }
-  const verification = []
-  uncorrected.on('playerChat', event => verification.push(event.verified === true))
-  function send(plainMessage, index, refs, acknowledged, { ahead = false, tamper = false, stale = false } = {}) {
-    const timestamp = BigInt(Date.now() + (ahead ? 5000 : stale ? -430000 : -1000))
-    const body = concat('i32', 1, 'UUID', uuid, 'UUID', session, 'i32', index, 'i64', 0n,
-      'i64', timestamp / 1000n, 'i32', Buffer.byteLength(plainMessage), 'pstring', plainMessage,
-      'i32', acknowledged.length, 'buffer', Buffer.concat(acknowledged))
-    const signature = sign('RSA-SHA256', body, privateKey)
-    if (tamper) signature[0] ^= 0xff
-    const buffer = writer.createPacketBuffer({ name: 'player_chat', params: {
-      globalIndex: index, senderUuid: uuid, index, signature, plainMessage, timestamp, salt: 0n,
-      previousMessages: refs.map(id => ({ id })), filterType: 0,
-      type: { chatType: 0 }, networkName: { type: 'string', value: 'fixture' }
-    } })
-    for (const client of [uncorrected, f.bot._client]) {
-      const { name, params } = reader.parsePacketBuffer(buffer).data
-      assert.equal(typeof params.timestamp, 'object')
-      assert.equal(params.timestamp.valueOf(), timestamp)
-      client.emit(name, params)
+for (const policy of ['strict', 'supervised-dry']) {
+  test(`Paper wire cache and signed STOP/replay gating (${policy})`, async () => {
+    const require = createRequire(import.meta.url)
+    const { createSerializer, createDeserializer, states } = require('minecraft-protocol')
+    const installChat = require('minecraft-protocol/src/client/chat')
+    const { concat } = require('minecraft-protocol/src/transforms/binaryStream')
+    const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const session = '00000000-0000-4000-8000-000000000002'
+    const keyBytes = publicKey.export({ format: 'der', type: 'spki' })
+    const version = '1.21.11'
+    const writer = createSerializer({ state: states.PLAY, version, isServer: true })
+    const reader = createDeserializer({ state: states.PLAY, version })
+    const f = fixture({ policy })
+    const uncorrected = new EventEmitter()
+    for (const client of [f.bot._client, uncorrected]) {
+      client.version = version
+      client.write = () => {}
+      installChat(client, {})
+      client.emit('player_info', { data: [{ uuid, chatSession: {
+        uuid: session, publicKey: { keyBytes }
+      } }] })
     }
-    return signature
-  }
-  try {
-    const first = send('ordinary fixture message', 0, [], [])
-    const second = send('!sara follow', 1, [1], [first])
-    await flush()
-    assert.deepEqual(verification, [true, false], 'pinned verifier alone misses Paper cache slot zero')
-    assert.ok(f.controller.activeTaskId)
-    send('!sara stop', 2, [1, 2], [second, first])
-    await flush()
-    assert.equal(f.controller.activeTaskId, null)
-    send('!sara follow', 3, [], [], { ahead: true })
-    await flush()
-    assert.equal(f.controller.activeTaskId, null)
-    assert.equal(f.reports.at(-1).timestampPresent, true)
-    assert.equal(f.reports.at(-1).timestampAhead, true)
-    assert.equal(f.reports.at(-1).signatureValidWithoutTime, true)
-    assert.equal(f.reports.at(-1).chainAllowsIndex, true)
-    assert.ok(f.reports.at(-1).signedDeltaAfterMs >= 4000)
-    assert.ok(f.reports.at(-1).signedDeltaBeforeMs >= f.reports.at(-1).signedDeltaAfterMs)
-    send('!sara follow', 4, [], [], { stale: true })
-    await flush()
-    assert.equal(f.controller.activeTaskId, null)
-    assert.equal(f.reports.at(-1).timestampExpired, true)
-    assert.equal(f.reports.at(-1).signatureValidWithoutTime, true)
-    assert.ok(f.reports.at(-1).signedDeltaBeforeMs <= -420000)
-    const third = send('ordinary signed message', 5, [], [])
-    send('!sara follow', 6, [1], [third], { tamper: true })
-    await flush()
-    assert.equal(f.controller.activeTaskId, null)
-    assert.equal(f.reports.at(-1).packedSignaturesResolved, true)
-    assert.equal(f.reports.at(-1).signatureVerified, false)
-    assert.equal(f.reports.at(-1).signatureValidWithoutTime, false)
-    send('!sara follow', 7, [128], [])
-    await flush()
-    assert.equal(f.controller.activeTaskId, null)
-    assert.equal(f.reports.at(-1).packedReferences, true)
-    assert.equal(f.reports.at(-1).packedSignaturesResolved, false)
-  } finally { await f.close() }
-})
+    const verification = []
+    uncorrected.on('playerChat', event => verification.push(event.verified === true))
+    function send(plainMessage, index, refs, acknowledged, { lead = -1000, tamper = false, globalIndex = index, replayAt } = {}) {
+      const timestamp = BigInt(Date.now() + lead)
+      const body = concat('i32', 1, 'UUID', uuid, 'UUID', session, 'i32', index, 'i64', 0n,
+        'i64', timestamp / 1000n, 'i32', Buffer.byteLength(plainMessage), 'pstring', plainMessage,
+        'i32', acknowledged.length, 'buffer', Buffer.concat(acknowledged))
+      const signature = sign('RSA-SHA256', body, privateKey)
+      if (tamper) signature[0] ^= 0xff
+      const buffer = writer.createPacketBuffer({ name: 'player_chat', params: {
+        globalIndex, senderUuid: uuid, index, signature, plainMessage, timestamp, salt: 0n,
+        previousMessages: refs.map(id => ({ id })), filterType: 0,
+        type: { chatType: 0 }, networkName: { type: 'string', value: 'fixture' }
+      } })
+      for (const client of [uncorrected, f.bot._client]) {
+        const { name, params } = reader.parsePacketBuffer(buffer).data
+        assert.equal(typeof params.timestamp, 'object')
+        assert.equal(params.timestamp.valueOf(), timestamp)
+        client.emit(name, params)
+      }
+      if (replayAt !== undefined) {
+        const { name, params } = reader.parsePacketBuffer(buffer).data
+        f.bot._client.emit(name, { ...params, globalIndex: replayAt })
+      }
+      return signature
+    }
+    try {
+      const first = send('ordinary fixture message', 0, [], [])
+      const second = send('!sara follow', 1, [1], [first])
+      await flush()
+      assert.deepEqual(verification, [true, false], 'pinned verifier alone misses Paper cache slot zero')
+      assert.ok(f.controller.activeTaskId)
+      send('!sara stop', 2, [1, 2], [second, first])
+      await flush()
+      assert.equal(f.controller.activeTaskId, null)
+      send('!sara follow', 3, [], [], { lead: 5000 })
+      await flush()
+      assert.equal(f.controller.activeTaskId, null)
+      assert.equal(f.reports.at(-1).timestampPresent, true)
+      assert.equal(f.reports.at(-1).timestampAhead, true)
+      assert.equal(f.reports.at(-1).signatureValidWithoutTime, true)
+      assert.equal(f.reports.at(-1).chainAllowsIndex, true)
+      assert.ok(f.reports.at(-1).signedDeltaAfterMs >= 4000)
+      assert.ok(f.reports.at(-1).signedDeltaBeforeMs >= f.reports.at(-1).signedDeltaAfterMs)
+      send('!sara follow', 4, [], [], { lead: -430000 })
+      await flush()
+      assert.equal(f.controller.activeTaskId, null)
+      assert.equal(f.reports.at(-1).timestampExpired, true)
+      assert.equal(f.reports.at(-1).signatureValidWithoutTime, true)
+      assert.ok(f.reports.at(-1).signedDeltaBeforeMs <= -420000)
+      const bounded = send('!sara follow', 5, [], [], { lead: 180 })
+      await flush()
+      assert.equal(Boolean(f.controller.activeTaskId), policy === 'supervised-dry')
+      assert.equal(verification.at(-1), false)
+      send('!sara stop', 6, [1], [bounded], { lead: 180 })
+      await flush()
+      assert.equal(f.controller.activeTaskId, null)
+      assert.equal(verification.at(-1), false)
+      send('!sara follow', 7, [], [], { lead: 180, globalIndex: 1 })
+      await flush()
+      assert.equal(f.controller.activeTaskId, null)
+      assert.equal(f.reports.at(-1).indexFresh, false)
+      send('!sara stop', 8, [], [], { lead: 180, replayAt: 99 })
+      await flush()
+      assert.equal(f.reports.filter(r => r.event === 'movement_command' && r.kind === 'stop').length,
+        policy === 'supervised-dry' ? 3 : 1)
+      assert.equal(f.reports.findLast(r => r.event === 'movement_ignored').indexFresh, true)
+      const third = send('ordinary signed message', 9, [], [])
+      send('!sara follow', 10, [1], [third], { tamper: true, lead: 180 })
+      await flush()
+      assert.equal(f.controller.activeTaskId, null)
+      assert.equal(f.reports.at(-1).packedSignaturesResolved, true)
+      assert.equal(f.reports.at(-1).signatureVerified, false)
+      assert.equal(f.reports.at(-1).signatureValidWithoutTime, false)
+      send('!sara follow', 11, [128], [])
+      await flush()
+      assert.equal(f.controller.activeTaskId, null)
+      assert.equal(f.reports.at(-1).packedReferences, true)
+      assert.equal(f.reports.at(-1).packedSignaturesResolved, false)
+    } finally { await f.close() }
+  })
+}
 
 test('malformed timestamp and missing session never yield independent signature proof', () => {
   const client = new EventEmitter()

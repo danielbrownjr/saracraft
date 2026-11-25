@@ -9,6 +9,8 @@ const { concat } = require('minecraft-protocol/src/transforms/binaryStream')
 // existing verifier; its signature, session and freshness checks still decide.
 const signatureBytes = 256
 const cacheSize = 128
+// The attended diagnostic measured a lead of 182–186 ms for a signed command.
+const supervisedFutureLimitMs = 250
 const logDeltaLimit = 1_000_000n
 
 function boundedDelta(timestamp, wall) {
@@ -87,6 +89,9 @@ export function observeChatWire(client) {
     const age = before - timestamp
     observed = {
       sender: packet.senderUuid, index: packet.globalIndex, timestamp,
+      session, messageIndex: packet.index, signature: packet.signature,
+      advancesSession: Boolean(session?.hasChainIntegrity === true &&
+        (!session.lastSignature || packet.index > session.sessionIndex)),
       flags: {
         wireObserved: true,
         signaturePresent: Boolean(packet.signature),
@@ -111,8 +116,18 @@ export function observeChatWire(client) {
     take(packet) {
       const current = observed
       observed = undefined
-      return current && current.sender === packet?.sender && current.index === packet?.globalIndex
-        ? { ...current.flags, signedDeltaAfterMs: boundedDelta(current.timestamp, BigInt(Date.now())) } : {}
+      if (!current || current.sender !== packet?.sender || current.index !== packet?.globalIndex) return {}
+      const signedDeltaAfterMs = boundedDelta(current.timestamp, BigInt(Date.now()))
+      const { signedDeltaBeforeMs, signatureValidWithoutTime, unsignedDecoration } = current.flags
+      const session = client._players?.[current.sender]
+      // The pinned handler verifies the chain before applying its timestamp window.
+      // Require that handler to have accepted this exact signature into the same session.
+      const allowSupervisedClockSkew = packet.verified === false && signatureValidWithoutTime &&
+        !unsignedDecoration && signedDeltaBeforeMs > 0 && signedDeltaBeforeMs <= supervisedFutureLimitMs &&
+        signedDeltaAfterMs >= 0 && signedDeltaAfterMs <= signedDeltaBeforeMs &&
+        current.advancesSession && session === current.session && session.hasChainIntegrity === true &&
+        session.sessionIndex === current.messageIndex && session.lastSignature?.equals(current.signature) === true
+      return { ...current.flags, signedDeltaAfterMs, allowSupervisedClockSkew }
     },
     dispose() {
       client.removeListener('player_chat', receive)
