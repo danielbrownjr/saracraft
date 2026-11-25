@@ -10,12 +10,17 @@ const cases = [
   ['Keep up with me','follow'], ['Walk to where I am','come'],
   ['Look in my direction','look'], ['Grab the nearby dropped item','collect']
 ]
-const bot = new LocalOllama({model,endpoint})
 const ac = new AbortController()
 process.once('SIGINT',()=>ac.abort())
 try {
-  // One warm-up outside the measured set; no retry or model search.
-  await bot.propose('Say hello',ac.signal)
+  const bot = new LocalOllama({model,endpoint})
+  // Record one warm-up, including failures; no retry or model search.
+  const warmStart=performance.now()
+  let warmError=null
+  try { await bot.propose('Say hello',ac.signal) }
+  catch(e){warmError=e.message}
+  console.log(JSON.stringify({warmup:{ms:Math.round(performance.now()-warmStart),error:warmError}}))
+  if(ac.signal.aborted) throw Error('CANCELLED')
   const results=[]
   for (const [request,expected] of cases) {
     if(ac.signal.aborted) throw Error('CANCELLED')
@@ -28,6 +33,7 @@ try {
     results.push(result)
     console.log(JSON.stringify(result))
   }
+  if(ac.signal.aborted) throw Error('CANCELLED')
   const sorted=results.map(x=>x.ms).sort((a,b)=>a-b)
   const median=(sorted[4]+sorted[5])/2
   console.log(JSON.stringify({model,requests:results.length,correct:results.filter(x=>x.pass).length,medianMs:median,advisoryTargetMet:median<=10000}))
