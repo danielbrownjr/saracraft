@@ -12,7 +12,7 @@ From controller: `node --test inference/ollama.test.js` or `npm test`. All infer
 
 ## Actual benchmark (separately authorized endpoint)
 
-Use one installed model chosen for available RAM/compute; record host CPU/RAM, Ollama version, model tag/digest and endpoint locality separately. From controller run:
+Use one installed model chosen for available RAM/compute; record host CPU/RAM, Ollama version, model tag/digest and endpoint locality separately. Before running, confirm the selected model is stored locally (inspect `ollama ls` and `ollama show` on the intended inference host and record its digest). Do not select cloud-backed tags; verify hosted inference is disabled on the intended server, using the installed version's supported controls. A local API endpoint alone does not guarantee local inference. If locality cannot be established, do not benchmark. From controller run:
 
 ```sh
 SARACRAFT_OLLAMA_MODEL='<installed model tag>' node inference/benchmark.js
@@ -20,6 +20,6 @@ SARACRAFT_OLLAMA_MODEL='<installed model tag>' node inference/benchmark.js
 
 For an approved private LAN server, additionally set SARACRAFT_OLLAMA_ENDPOINT to its fixed literal private IP and /api/chat path. Do not expose Ollama publicly or install/configure it without approval.
 
-The script performs one warm-up then ten measured prompts covering all six intents, with no retries. It prints expected/actual action, elapsed milliseconds, pass/error and aggregate median. It exits nonzero if any prompt fails; the 10-second median is advisory, not a failure gate. Ctrl-C cancels. No chat contents or credentials are printed. Retain actual results; do not claim measured latency from fixtures. A real model may differ in its structured-output support or response correctness; adjust the chosen model only if the first candidate fails. Stop after the bounded benchmark and report tradeoffs.
+The script records one warm-up (elapsed time and any failure), then ten measured prompts covering all six intents, with no retries. A failed warm-up does not suppress measurements; caller cancellation stops the run. If warm-up failed, subsequent samples may include cold-load time; report that limitation rather than claiming all samples were warm. Confirm that the installed Ollama version/model supports the discriminated `anyOf`/`const` schema on the first real run. It prints expected/actual action, elapsed milliseconds, pass/error and aggregate median. It exits nonzero if any prompt fails; the 10-second median is advisory, not a failure gate. Ctrl-C cancels. No chat contents or credentials are printed. Retain actual results; do not claim measured latency from fixtures. A real model may differ in its structured-output support or response correctness; adjust the chosen model only if the first candidate fails. Stop after the bounded benchmark and report tradeoffs.
 
 M4 remains unaccepted until actual local inference evidence is recorded. No deployment or merge is authorized by this document.
