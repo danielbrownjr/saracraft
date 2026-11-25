@@ -27,7 +27,7 @@ test('action count bounded, failure and abort stop subsequent proposals',async()
   for(const mode of ['limit','failure','abort']){
     const ac=new AbortController();let calls=0
     await runGoal({request:'look',signal:ac.signal,current:()=>true,observe:()=>state,
-      provider:{propose:async()=>{calls++;return {action:'look'}}},
+      provider:{propose:async()=>{calls++;return {action:['look','come','collect'][calls-1]}}},
       execute:async()=>{if(mode==='abort')ac.abort();return {state:mode==='failure'?'FAILED':'COMPLETED'}},
       reply:()=>{},report:()=>{}})
     assert.equal(calls,mode==='limit'?3:1)
@@ -44,4 +44,18 @@ test('nearby truncation is explicit including upstream truncation and prompt siz
     assert.ok(prompt.length<=1000)
     assert.equal(JSON.parse(prompt).observed.nearbyTruncated,true)
   }
+})
+
+test('repeated completed look is not executed a second time',async()=>{
+  let calls=0,actions=0;const events=[]
+  await runGoal({request:'turn and face me',signal:new AbortController().signal,current:()=>true,observe:()=>state,
+    provider:{propose:async()=>{calls++;return {action:'look'}}},execute:async()=>{actions++;return {state:'COMPLETED'}},reply:()=>{},report:(event,data)=>events.push({event,...data})})
+  assert.equal(calls,2);assert.equal(actions,1)
+  assert.ok(events.some(e=>e.reason==='REPEATED_ACTION'))
+})
+test('failed execution reports controller reason without retry',async()=>{
+  const events=[];let calls=0
+  await runGoal({request:'turn and face me',signal:new AbortController().signal,current:()=>true,observe:()=>state,
+    provider:{propose:async()=>{calls++;return {action:'look'}}},execute:async()=>({state:'FAILED',reason:'NOT_VERIFIED'}),reply:()=>{},report:(event,data)=>events.push({event,...data})})
+  assert.equal(calls,1);assert.ok(events.some(e=>e.event==='goal_action'&&e.reason==='NOT_VERIFIED'))
 })

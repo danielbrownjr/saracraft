@@ -391,9 +391,11 @@ function installMovement(bot, commanderUuid, report, options = {}) {
             const kind = action === 'come' ? 'comeHere' : action
             const reply = commandReply(kind,result)
             if (reply) { try { bot.chat(reply) } catch {} }
-            if (!result.accepted) return {state:'REJECTED'}
-            if (action === 'stop') return {state:result.stopped ? 'COMPLETED' : 'FAILED'}
-            return await result.completion
+            if (!result.accepted) return {state:'REJECTED',reason:result.reason}
+            if (action === 'stop') return {state:result.stopped ? 'COMPLETED' : 'FAILED',reason:result.reason}
+            const final = await result.completion
+            report('movement_result', {kind,state:final.state,reason:final.reason,haltState:final.haltState,movementStopped:false})
+            return final
           }
         })
       } finally { if (goalAbort === ac) goalAbort = null }
