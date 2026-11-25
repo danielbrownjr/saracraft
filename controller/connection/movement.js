@@ -73,7 +73,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
     if (task.haltState === 'failed') throw new Error('HALT_FAILED')
   }
   function waitingForRoute(task) {
-    return (task.follow || task.collect) && task.goalInstalled && !task.path?.[0] || task.partial === true
+    return task.partial === true || task.pickedUp || ((task.follow || task.collect) && task.goalInstalled && !task.path?.[0])
   }
   function clearWaitingControls() {
     haltingDepth++
@@ -127,7 +127,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   const guardedControl = (control, value) => {
     if (value === false && haltingDepth > 0) return originalControl(control, false)
     const task = active
-    if (task && (task.follow || task.collect || task.partial) && !task.path?.[0]) {
+    if (task && (task.pickedUp || task.partial || ((task.follow || task.collect) && !task.path?.[0]))) {
       if (!value) return originalControl(control, false)
       if (waitingForRoute(task)) clearWaitingControls()
       return
@@ -209,7 +209,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
         if (active !== task || signal.aborted || collector !== bot.entity || collected !== item) return
         task.pickedUp = true
         task.path = null; task.proposedStep = null
-        rawHalt()
+        try { rawHalt() } catch { rejectMovement(task, null, 'STATE_UNAVAILABLE') }
       }
       if (collect) bot.on('playerCollect', onCollect)
       task.finish = finish
@@ -236,6 +236,8 @@ function installMovement(bot, commanderUuid, report, options = {}) {
           let next = search.next().value?.result
           const deadline = Date.now() + (options.searchTimeoutMs ?? 100)
           while (next?.status === 'partial' && Date.now() < deadline && !signal.aborted) {
+            if (!Array.isArray(next.path) || next.path.some(p => p.toBreak?.length || p.toPlace?.length)) break
+            task.partial = true
             await new Promise(resolve => setImmediate(resolve))
             if (signal.aborted || task !== active) return
             next = search.next().value?.result
@@ -244,6 +246,8 @@ function installMovement(bot, commanderUuid, report, options = {}) {
               next.path.some(p => p.toBreak?.length || p.toPlace?.length)) {
             rejectMovement(task, null, 'UNKNOWN_STATE'); return
           }
+          if (task.pickedUp) return
+          task.partial = false
           task.proposedStep = next.path[0] ?? (goal.isEnd(position.floored()) ? position.clone() : null)
           const verdict = await task.monitor.check({ signal })
           if (!verdict.safe) {
@@ -282,7 +286,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   } })
   function pathUpdate(result) {
     const task = active
-    if (!task || task.finishing) return
+    if (!task || task.finishing || task.pickedUp) return
     // 2.4.5 keeps and shifts this exact array after emitting path_update. Retaining
     // its reference makes path[0] the actual next step at each control call.
     task.path = result?.path
@@ -312,25 +316,25 @@ function installMovement(bot, commanderUuid, report, options = {}) {
     if (!task || task.finishing) return
     const target = Object.values(bot.players ?? {}).find(p => normalizeUuid(p.uuid) === normalizeUuid(commanderUuid))?.entity
     const p = bot.entity?.position
-    if (!p || target !== task.target || p.distanceTo(task.start) > 32 || p.distanceTo(target.position) > 32) {
+    if (!p || target !== task.target || p.distanceTo(task.start) > task.radius || p.distanceTo(target.position) > task.radius) {
       task.cancel?.('MOVEMENT_BOUNDARY'); task.finish(false, 'MOVEMENT_BOUNDARY'); return
     }
     if (waitingForRoute(task)) clearWaitingControls()
     if (task.collect && task.pickedUp) {
       const after = inventoryCounts(bot)
       const delta = after ? (after.get(task.drop.name) ?? 0) - (task.before.get(task.drop.name) ?? 0) : 0
-      if (delta > 0 && guard(task)) {
+      if (delta > 0 && delta <= task.drop.count && guard(task)) {
         report('gameplay_pickup', { item: task.drop.name, delta })
         task.finish(true); return
       }
     }
-    if (guard(task) && !task.finishing && task.destination && !task.follow && !task.collect && p.distanceTo(task.destination) <= 2.5) task.finish(true)
+    if (guard(task) && !task.finishing && !task.partial && task.destination && !task.follow && !task.collect && p.distanceTo(task.destination) <= 2.5) task.finish(true)
     void check(task)
   }
   // goal_reached is emitted for static come-here goals; follow stays active.
   function goalReached() {
     const task = active
-    if (task && !task.follow && !task.collect && bot.entity?.position?.distanceTo(task.destination) <= 2.5 && guard(task)) task.finish(true)
+    if (task && !task.partial && !task.follow && !task.collect && bot.entity?.position?.distanceTo(task.destination) <= 2.5 && guard(task)) task.finish(true)
   }
   let lastChatIndex = -1
   let commandSequence = 0
@@ -412,10 +416,8 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   const onPlayerChat = packet => { void playerChat(packet).catch(() => shutdown()) }
   bot._client.on('playerChat', onPlayerChat)
   bot.once('end', end)
-  if (policy === 'supervised-dry') {
-    bot.once('death', shutdown)
-    bot.once('respawn', shutdown)
-  }
+  bot.once('death', shutdown)
+  bot.once('respawn', shutdown)
   options.signal?.addEventListener('abort', shutdown, { once: true })
   if (options.signal?.aborted) shutdown()
   halt.controller = controller
