@@ -2,28 +2,33 @@
 
 ![SaraCraft banner featuring a pixel-art engineer in a Minecraft-inspired workshop](branding/saracraft-project-banner.png)
 
-A private Minecraft Java AI companion project for cooperative survival.
+A private Minecraft Java AI companion for cooperative survival, designed for local Ollama inference.
 
-**Status (2026-11-24): Wave 1 source PRs #5–#11 merged to `main`.** Navigation, observation-control, packaging and attended authentication-only source are reviewed; this does not install, activate, authenticate or permit Minecraft gameplay. The credential-free host acceptance gate passed for source `407a1d8`, while trusted-manifest promotion and real sign-in require separate authorization. See [M0.8 integration](docs/m0-8-integration.md), [source reconciliation](docs/m0-8-reconciliation.md), and [auth packaging/host acceptance](docs/auth-packaging-and-host-acceptance.md).
+## MVP roadmap
+
+[Zero-to-local MVP roadmap](docs/mvp-roadmap.md) defines the proposed scope, ordered milestones, acceptance criteria and exclusions. [MVP issues](https://github.com/danielbrownjr/saracraft/issues?q=is%3Aissue+label%3Amvp) track execution. Prior implementations and historical evidence are retained; progress is reconciled against the new acceptance criteria rather than assumed or rebuilt.
+
+The MVP is a locally inferred companion that understands authenticated natural-language requests, observes bounded game state, and executes a small allowlist of actions in a shared private world. No hosted inference or cloud fallback.
+
+Current state: connection demonstrated; live command admission, model integration and gameplay acceptance remain unverified.
 
 ## Design choices
 
-- New Java survival world, Normal difficulty; candidate protocol 1.21.11 and Java 21.
-- Paper on Hephaestus N100, Mineflayer/Mindcraft CE bot and controller there; hosted API initially, local Ollama later.
+- One private Java survival world, Paper and Mineflayer; reuse the pinned Node stack.
+- One local Ollama endpoint/model on existing authorized hardware.
 - Private LAN/WireGuard ingress; online mode, enforced allowlist, distinct licensed accounts, bot not op.
-- Model proposes bounded intent; controller independently authorizes it and provides out-of-band STOP.
-- World stored on Heph local NVMe, off-host NAS backup with tested restore before acceptance.
+- Model proposes bounded intent; controller independently validates and executes, with direct and out-of-band STOP.
 - No model-generated code execution, admin access, or trusting in-game names for identity.
 
-## Design documents
+## Historical technical references
+
+These documents preserve technical context, not additional MVP milestones. For scope and order, the MVP roadmap takes precedence after approval; security and authorization requirements remain in force.
 
 - [M0 acceptance](docs/M0-acceptance.md)
 - [Compatibility matrix](docs/compatibility-matrix.md)
 - [Host and security design](docs/host-and-security-design.md)
 - [Controller contract](docs/controller-contract.md)
 - [Architecture](docs/architecture.md)
-- [Implementation backlog](docs/implementation-backlog.md)
+- [Historical implementation backlog](docs/implementation-backlog.md)
 
-`compose.yaml` is a **nondeployable-by-default design template**. Deployment requires explicit approval, EULA acceptance, verified private bind IP, authenticated allowlist, immutable image digest, and a reviewed build. The illustrative bot profile is not a validated Mindcraft CE schema. No credentials belong in Git.
-
-Next gate: separately authorized trusted-manifest promotion of exact reviewed source `407a1d8`, then separately gated attended authentication and stationary observation. PRs #3 and #4 remain draft. No deployment or gameplay is authorized by source merges.
+`compose.yaml` remains a nondeployable-by-default design template. No credentials belong in Git. Source merges do not authorize deployment, host changes or live gameplay.
