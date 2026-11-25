@@ -11,11 +11,9 @@
 - Remaining blockers and limitations:
 
 ## Scope check
-- [ ] No unrelated capability or speculative infrastructure added.
-- [ ] New work is required by the named criterion or a demonstrated security/data-integrity invariant.
-- [ ] Nonblocking improvements are deferred, not new prerequisites.
-- [ ] Scope or acceptance changes have explicit owner approval and a roadmap diff.
+- [ ] Work advances the named criterion or a demonstrated security/data-integrity invariant; unrelated and nonblocking improvements are deferred.
+- [ ] Scope or acceptance changes have explicit owner approval and an owner-approved roadmap diff.
 - [ ] Host, credential, identity, STOP and recovery boundaries preserved.
 - [ ] No merge, deployment or live launch implied by this PR.
 
-Planning-only PRs may name the roadmap instead of a capability issue. See [MVP roadmap](../docs/mvp-roadmap.md).
+Planning-only PRs may name the roadmap instead of a capability issue. See [MVP roadmap](https://github.com/danielbrownjr/saracraft/blob/main/docs/mvp-roadmap.md).
