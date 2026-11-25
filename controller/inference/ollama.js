@@ -43,6 +43,8 @@ async function readBounded(response, signal) {
   const reader = response.body?.getReader()
   if (!reader) throw Error('INVALID_RESPONSE')
   const chunks = []; let total = 0
+  const cancel = () => { void reader.cancel().catch(() => {}) }
+  signal.addEventListener('abort', cancel, { once: true })
   try {
     for (;;) {
       signal.throwIfAborted()
@@ -54,7 +56,9 @@ async function readBounded(response, signal) {
     }
     return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))
   } finally {
-    void reader.cancel().catch(() => {})
+    signal.removeEventListener('abort', cancel)
+    cancel()
+    reader.releaseLock()
   }
 }
 
@@ -86,7 +90,10 @@ export class LocalOllama {
           options: { temperature: 0, num_predict: 256, num_ctx: 2048 } })
       })
       ac.signal.throwIfAborted()
-      if (!response.ok) throw Error('PROVIDER_FAILURE')
+      if (!response.ok) {
+        void response.body?.cancel().catch(() => {})
+        throw Error('PROVIDER_FAILURE')
+      }
       const raw = await readBounded(response, ac.signal)
       ac.signal.throwIfAborted()
       let data
