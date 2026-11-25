@@ -27,3 +27,7 @@ M4 remains unaccepted until actual local inference evidence is recorded. No depl
 ## MVP-05 integration
 
 In supervised-dry mode only, the existing fixed loopback Ollama endpoint and accepted qwen2.5:1.5b model are used for authenticated `!sara ask <request>` messages. No ambient chat activation. Direct deterministic commands remain available, including STOP, which aborts inference and remaining goal steps. Each request permits at most three typed intents; fresh bounded observations and verified result history are supplied before each proposal. Follow remains a continuous action until cancellation. No model-provided targets or coordinates are accepted. Host operator must verify Ollama locality, cloud-disabled configuration, model digest and service reachability before authorized use. No daemon startup is performed by the bot. Offline tests use injected providers; real inference/gameplay evidence is required separately.
+
+### MVP-05 remediation
+
+The attended trial selected look for two follow requests and repeated completed looks. Use explicit intent examples, request/history before rounded observations, and reject repeated completed action types within one goal. A deliberate repeated action needs a fresh request. The same model and execution authority remain unchanged. Controller failure reasons are logged without raw requests. Validate the actual contextual prompts against the installed model offline before another attended session; injected responses cannot establish model accuracy.
