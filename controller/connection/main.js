@@ -61,6 +61,7 @@ async function main({ walk, observe, commanderUuid, policy = 'strict' }) {
   if (abort.signal.aborted) return false
   report('identity_verified', observe ? {} : identity)
   connecting = true
+  const inference = walk && policy === 'supervised-dry' ? new (await import('../inference/ollama.js')).LocalOllama({model:'qwen2.5:1.5b'}) : null
   const installMovement = walk ? (await import('./movement.js')).enableMovement : null
   const installObserver = observe ? (await import('./observe.js')).enableObservation : null
   let attachment
@@ -104,7 +105,7 @@ async function main({ walk, observe, commanderUuid, policy = 'strict' }) {
       if (walk || observe) {
         try {
           attachment = walk
-            ? installMovement(bot, commanderUuid, trialReport, { signal: abort.signal, policy })
+            ? installMovement(bot, commanderUuid, trialReport, { signal: abort.signal, policy, inference })
             : installObserver(bot, trialReport)
         } catch {
           queueMicrotask(() => bot.emit('error', new Error('Session initialization failed')))
