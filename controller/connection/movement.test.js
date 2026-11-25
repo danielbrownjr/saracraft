@@ -27,7 +27,7 @@ function fixture({ readState = dry, report, limits = {}, preplan, policy, manual
   bot.pathfinder = {
     setMovements() {},
     setGoal(goal, dynamic) { this.goal = goal; this.dynamic = dynamic; bot.emit('goal_updated', goal); bot.emit('path_reset', 'goal_updated'); bot.clearControlStates(); acts.push(['goal', goal]) },
-    getPathFromTo: function* () { yield { result: preplan ?? { status: 'success', path: [{ x: 1.5, y: 1, z: 0.5, toBreak: [], toPlace: [] }] } } }
+    getPathFromTo: function* () { if (Array.isArray(preplan)) { for (const result of preplan) yield {result}; return } yield { result: preplan ?? { status: 'success', path: [{ x: 1.5, y: 1, z: 0.5, toBreak: [], toPlace: [] }] } } }
   }
   bot.loadPlugin = () => {
     bot.on('physicsTick', () => {
@@ -238,7 +238,7 @@ test('disconnect and global shutdown prevent queued callbacks from restarting co
   }
 })
 test('incomplete planning rejects goal, and reporting failures cannot strand tasks', async () => {
-  const f = fixture({ preplan: { status: 'partial', path: [] }, report: () => { throw Error('disk unavailable') } })
+  const f = fixture({ preplan: { status: 'noPath', path: [] }, report: () => { throw Error('disk unavailable') } })
   const task = await f.controller.handle(envelope('!sara follow'))
   assert.equal((await task.completion).state, 'CANCELLED'); await f.close()
 })
@@ -478,4 +478,57 @@ test('failed replanning remains fail closed', async () => {
     f.bot.setControlState('forward',true)
     assert.equal(f.bot.controlState.forward,false)
   } finally { await f.close() }
+})
+
+test('partial preplan completes next slice; partial replan never authorizes controls', async () => {
+  const step = new Vec3(1.5,1,0.5)
+  const f=fixture({manualRoute:true,preplan:[{status:'partial',path:[step]},{status:'success',path:[step]}]})
+  try {
+    const task=await f.controller.handle(envelope('!sara follow'))
+    await new Promise(resolve=>setImmediate(resolve)); await flush()
+    assert.ok(f.bot.pathfinder.goal)
+    f.bot.emit('path_update',{status:'partial',path:[step]})
+    f.bot.setControlState('forward',true)
+    assert.equal(f.bot.controlState.forward,false)
+    assert.equal(f.controller.activeTaskId,task.taskId)
+    f.bot.emit('path_update',{status:'success',path:[step]})
+    f.bot.setControlState('forward',true)
+    assert.equal(f.bot.controlState.forward,true)
+    await f.controller.stop()
+  } finally {await f.close()}
+})
+test('authenticated gameplay status, look and pickup require observed effects', async () => {
+  const f=fixture({manualRoute:true})
+  try {
+    let items=[{name:'stone',count:2}]
+    const drop={id:3,name:'item',position:new Vec3(2.5,1,0.5),getDroppedItem:()=>({name:'stone',count:1})}
+    f.bot.entities={1:f.bot.entity,2:f.bot.players.commander.entity,3:drop}
+    f.bot.players.commander.entity.id=2
+    f.bot.players.commander.entity.name='player'
+    f.bot.health=20;f.bot.inventory={items:()=>items}
+    f.bot.entity.eyeHeight=1.62
+    f.bot.lookAt=async q=>{
+      const d=q.minus(f.bot.entity.position.offset(0,1.62,0))
+      f.bot.entity.yaw=Math.atan2(-d.x,-d.z);f.bot.entity.pitch=Math.atan2(d.y,Math.hypot(d.x,d.z))
+    }
+    f.packet('!sara status',1,{verified:false});await flush()
+    assert.equal(f.reports.some(r=>r.event==='gameplay_observation'),false)
+    f.packet('!sara status',1);await flush()
+    assert.deepEqual(f.reports.find(r=>r.event==='gameplay_observation').inventory,[{name:'stone',count:2}])
+    f.packet('!sara look',2);await flush()
+    assert.equal(f.reports.find(r=>r.event==='movement_result'&&r.kind==='look').state,'COMPLETED')
+    f.packet('!sara collect',3);await flush()
+    assert.ok(f.bot.pathfinder.goal)
+    f.bot.emit('playerCollect',f.bot.players.commander.entity,drop)
+    f.bot.emit('physicsTick');await flush()
+    assert.ok(f.controller.activeTaskId)
+    f.bot.emit('playerCollect',f.bot.entity,drop)
+    delete f.bot.entities[3]
+    f.bot.emit('physicsTick');await flush()
+    assert.ok(f.controller.activeTaskId,'pickup packet alone is insufficient')
+    items=[{name:'stone',count:3}]
+    f.bot.emit('physicsTick');await flush()
+    assert.equal(f.reports.find(r=>r.event==='gameplay_pickup').delta,1)
+    assert.equal(f.controller.activeTaskId,null)
+  } finally {await f.close()}
 })
