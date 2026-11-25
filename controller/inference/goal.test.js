@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { goalRequest, runGoal } from './goal.js'
+import { goalRequest, goalPrompt, runGoal } from './goal.js'
 const state={position:{x:0,y:64,z:0},health:20,commander:{x:2,y:64,z:0},inventory:[],nearby:[]}
 test('two-step goal sees actual updated observations and completed action history',async()=>{
   const ac=new AbortController(),prompts=[],actions=[],replies=[]
@@ -35,4 +35,13 @@ test('action count bounded, failure and abort stop subsequent proposals',async()
   assert.equal(goalRequest('ambient chat'),null)
   assert.equal(goalRequest('!sara ask '),null)
   assert.equal(goalRequest('!sara ask look at me'),'look at me')
+})
+
+test('nearby truncation is explicit including upstream truncation and prompt size reduction',()=>{
+  const entry={kind:'item',position:{x:1,y:64,z:2},item:{name:'stone',count:1}}
+  for(const snapshot of [{...state,nearbyTruncated:true},{...state,nearby:Array(5).fill(entry)},{...state,nearby:Array(4).fill({...entry,kind:'x'.repeat(64),item:{name:'x'.repeat(64),count:1}})}]){
+    const prompt=goalPrompt('look',snapshot,[])
+    assert.ok(prompt.length<=1000)
+    assert.equal(JSON.parse(prompt).observed.nearbyTruncated,true)
+  }
 })

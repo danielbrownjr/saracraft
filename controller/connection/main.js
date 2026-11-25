@@ -73,7 +73,8 @@ async function main({ walk, observe, commanderUuid, policy = 'strict' }) {
   } : report
   return verifyConnection({
     config: target, report: trialReport, signal: abort.signal,
-    stay: walk || observe, sessionMs: observe ? observationTiming.sessionMs : 480_000,
+    stay: walk || observe, supervised: walk && policy === 'supervised-dry',
+    sessionMs: observe ? observationTiming.sessionMs : (walk && policy === 'supervised-dry' ? 1_500_000 : 480_000),
     maxAttempts: observe || policy === 'supervised-dry' ? 1 : 2,
     onClosing: () => attachment?.dispose(),
     createBot: () => {
@@ -127,7 +128,7 @@ try {
     const forceExit = setTimeout(() => process.exit(1), options.observe ? 4_000 : 0)
     forceExit.unref()
     if (!options.observe) process.exit(1)
-  }, options.observe ? observationTiming.deadlineMs : (options.walk ? 17 : 8) * 60_000)
+  }, options.observe ? observationTiming.deadlineMs : (options.walk ? (options.policy === 'supervised-dry' ? 30 : 17) : 8) * 60_000)
   deadline.unref()
   try {
     process.exitCode = (await main(options)) && !abort.signal.aborted ? 0 : 1

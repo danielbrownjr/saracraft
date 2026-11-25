@@ -565,3 +565,27 @@ test('authenticated ask uses fresh observations, direct STOP discards late infer
     assert.equal(f.acts.some(([k,v])=>k==='goal'&&v!==null),false)
   } finally {await f.close()}
 })
+
+test('model STOP acknowledges and records outcome without another proposal', async () => {
+  let calls=0
+  const f=fixture({inference:{propose:async()=>{calls++;return {action:'stop'}}}})
+  try {
+    f.bot.entities={1:f.bot.entity}; f.bot.health=20; f.bot.inventory={items:()=>[]}
+    f.packet('!sara ask stop moving',1); await flush()
+    assert.equal(calls,1)
+    assert.ok(f.acts.some(([k,v])=>k==='chat'&&v.startsWith('Halt acknowledged')))
+    assert.ok(f.reports.some(r=>r.event==='goal_action'&&r.action==='stop'&&r.state==='COMPLETED'))
+    assert.ok(f.reports.some(r=>r.event==='goal_end'))
+    assert.equal(f.controller.activeTaskId,null)
+  } finally { await f.close() }
+})
+test('throwing model reply does not disable deterministic gameplay',async()=>{
+  const f=fixture({inference:{propose:async()=>({action:'chat',text:'Hello'})}})
+  try {
+    f.bot.entities={1:f.bot.entity};f.bot.health=20;f.bot.inventory={items:()=>[]}
+    f.bot.chat=()=>{throw Error('chat unavailable')}
+    f.packet('!sara ask hello',1);await flush()
+    f.packet('!sara come',2);await flush()
+    assert.ok(f.bot.pathfinder.goal)
+  } finally {await f.close()}
+})

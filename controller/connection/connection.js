@@ -35,9 +35,9 @@ export function classify(source, error) {
 // The caller owns the shutdown signal. Only transport failures before spawn are retried.
 export async function verifyConnection({ createBot, config, report, signal, timeoutMs = 30_000,
   heartbeatMs = 5_000, closeMs = 5_000, retryDelayMs = 2_000, stay = false, sessionMs = 480_000,
-  onClosing = () => {}, maxAttempts = 2 }) {
+  onClosing = () => {}, maxAttempts = 2, supervised = false }) {
   checkTarget(config)
-  if (typeof stay !== 'boolean' || !Number.isFinite(sessionMs) || sessionMs <= 0 || sessionMs > 480_000 ||
+  if (typeof supervised !== 'boolean' || typeof stay !== 'boolean' || !Number.isFinite(sessionMs) || sessionMs <= 0 || sessionMs > (supervised && stay ? 1_500_000 : 480_000) ||
       !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 2) {
     throw new Error('Invalid bounded movement session')
   }

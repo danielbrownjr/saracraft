@@ -186,3 +186,11 @@ test('asynchronous closing hooks are rejected without waiting or unhandled rejec
     assert.ok(result.events.some(e => e.event === 'failed' && e.detail.category === 'movement_halt'))
   }
 })
+
+test('extended session is bounded and only explicitly supervised stay permits it',async()=>{
+  for(const options of [{stay:true,supervised:true,sessionMs:1500001},{stay:false,supervised:true,sessionMs:480001},{stay:true,supervised:false,sessionMs:480001}]){
+    await assert.rejects(verifyConnection({config:target,...options,report(){},createBot(){assert.fail('must not create bot')}}),/Invalid bounded/)
+  }
+  const ac=new AbortController();ac.abort()
+  assert.equal(await verifyConnection({config:target,stay:true,supervised:true,sessionMs:1500000,signal:ac.signal,report(){},createBot(){assert.fail('already aborted')}}),false)
+})

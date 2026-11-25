@@ -11,11 +11,12 @@ export function goalPrompt(request, state, history) {
   const observed = {
     position: state.position, health: state.health, commander: state.commander,
     inventory: state.inventory.slice(0,8), inventoryTruncated: state.inventory.length > 8,
+    nearbyTruncated: state.nearbyTruncated === true || state.nearby.length > 4,
     nearby: state.nearby.slice(0,4).map(e => ({ kind:e.kind, position:e.position, item:e.item }))
   }
   let data = JSON.stringify({ request, observed, history })
   while (data.length > 1000 && (observed.nearby.length || observed.inventory.length)) {
-    if (observed.nearby.length) observed.nearby.pop()
+    if (observed.nearby.length) { observed.nearby.pop(); observed.nearbyTruncated = true }
     else { observed.inventory.pop(); observed.inventoryTruncated = true }
     data = JSON.stringify({ request, observed, history })
   }
@@ -53,7 +54,9 @@ export async function runGoal({request, provider, observe, execute, reply, repor
     report('goal_action',{step,action:intent.action,state:result.state})
     // Follow is continuous until STOP, replacement, timeout or safety cancellation.
     // Never infer another action behind an active follow or after failure.
-    if (result.state !== 'COMPLETED' || intent.action === 'stop' || intent.action === 'follow') return
+    if (result.state !== 'COMPLETED' || intent.action === 'stop' || intent.action === 'follow') {
+      report('goal_end',{reason:result.state,step}); return
+    }
   }
   if (allowed()) report('goal_end',{reason:'ACTION_LIMIT'})
 }

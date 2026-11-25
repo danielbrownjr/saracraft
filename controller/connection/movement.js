@@ -144,8 +144,8 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   bot.setControlState = guardedControl
   bot.pathfinder.setGoal = guardedGoal
 
-  function halt() {
-    cancelGoal()
+  function halt(cancelInference = true) {
+    if (cancelInference) cancelGoal()
     const task = active
     if (task) {
       task.blocked ??= 'HALT'
@@ -284,7 +284,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
       return { verified: !signal.aborted && !disconnected && !disposed && commanderEntity() === target && facing(bot, target) }
     },
     collect: (uuid, opts) => move(uuid, { ...opts, radiusMax: 8 }, false, true),
-    gather: async () => ({ verified: false }), returnHome: async () => ({ verified: false }), halt
+    gather: async () => ({ verified: false }), returnHome: async () => ({ verified: false }), halt: () => halt(false)
   } })
   function pathUpdate(result) {
     const task = active
@@ -383,14 +383,14 @@ function installMovement(bot, commanderUuid, report, options = {}) {
       try {
         await runGoal({ request, provider: options.inference, signal: ac.signal, current,
           observe: () => observeGameplay(bot, commanderEntity()),
-          report, reply: text => { if (current() && !ac.signal.aborted) bot.chat(text) },
+          report, reply: text => { if (current() && !ac.signal.aborted) { try { bot.chat(text) } catch {} } },
           execute: async (text, action) => {
             if (!current() || ac.signal.aborted) return {state:'CANCELLED'}
             const result = await controller.handle({...envelope,text})
             if (!current() || ac.signal.aborted) return {state:'CANCELLED'}
             const kind = action === 'come' ? 'comeHere' : action
             const reply = commandReply(kind,result)
-            if (reply) bot.chat(reply)
+            if (reply) { try { bot.chat(reply) } catch {} }
             if (!result.accepted) return {state:'REJECTED'}
             if (action === 'stop') return {state:result.stopped ? 'COMPLETED' : 'FAILED'}
             return await result.completion
