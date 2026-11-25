@@ -11,7 +11,7 @@ const envelope = text => ({ source: 'authenticated_player_chat', senderUuid: uui
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve() }
 const dry = () => ({ air: 300, inWater: false, nextStepInWater: false, entitiesObserved: true,
   creeperDistance: null, sampledAt: Date.now(), observedAt: Date.now() })
-function fixture({ readState = dry, report, limits = {}, preplan, policy } = {}) {
+function fixture({ readState = dry, report, limits = {}, preplan, policy, manualRoute = false } = {}) {
   const bot = new EventEmitter()
   bot._client = new EventEmitter(); bot._client.cipher = {}
   bot.entity = { id: 1, position: new Vec3(0.5, 1, 0.5), velocity: new Vec3(0, 0, 0), onGround: true, isInWater: false }
@@ -31,7 +31,7 @@ function fixture({ readState = dry, report, limits = {}, preplan, policy } = {})
   }
   bot.loadPlugin = () => {
     bot.on('physicsTick', () => {
-      if (!bot.pathfinder.goal) return
+      if (!bot.pathfinder.goal || manualRoute) return
       route ??= [{ x: 1.5, y: 1, z: 0.5, toBreak: [], toPlace: [] }, { x: 2.5, y: 1, z: 0.5, toBreak: [], toPlace: [] }]
       bot.emit('path_update', { status: 'success', path: route })
       bot.setControlState('forward', true)
@@ -413,4 +413,69 @@ test('malformed timestamp and missing session never yield independent signature 
     assert.equal(flags.signatureValidWithoutTime, false)
     assert.equal(flags.chainAllowsIndex, false)
   } finally { wire.dispose() }
+})
+
+for (const policy of ['strict', 'supervised-dry']) {
+  test(`follow waits after route exhaustion and resumes only on verified route (${policy})`, async () => {
+    const seen = []
+    const f = fixture({ policy, manualRoute: true, readState: step => {
+      seen.push(step)
+      return step ? dry() : { ...dry(), nextStepInWater: undefined }
+    } })
+    try {
+      const task = await f.controller.handle(envelope('!sara follow')); await flush()
+      const goal = f.bot.pathfinder.goal
+      assert.ok(goal)
+      const route = [new Vec3(3.5, 1, 0.5)]
+      f.bot.emit('path_update', {status:'success',path:route})
+      f.bot.setControlState('forward', true)
+      assert.equal(f.bot.controlState.forward,true)
+      f.bot.entity.position = route.shift()
+      f.bot.emit('physicsTick'); await flush()
+      assert.equal(f.controller.activeTaskId,task.taskId)
+      assert.equal(f.bot.controlState.forward,false)
+      assert.equal(seen.at(-1),f.bot.entity.position)
+      f.bot.setControlState('forward',true)
+      assert.equal(f.bot.controlState.forward,false)
+      f.bot.players.commander.entity.position = new Vec3(6.5,1,0.5)
+      assert.equal(goal.hasChanged(),true)
+      assert.equal(goal.hasChanged(),false)
+      f.bot.emit('path_reset','goal_moved')
+      f.bot.emit('physicsTick'); await flush()
+      assert.equal(f.controller.activeTaskId,task.taskId)
+      f.bot.setControlState('jump',true)
+      assert.equal(f.bot.controlState.jump,false)
+      const next = new Vec3(4.5,1,0.5)
+      f.bot.emit('path_update',{status:'success',path:[next]})
+      f.bot.setControlState('forward',true)
+      assert.equal(f.bot.controlState.forward,true)
+      assert.equal(seen.at(-1),next)
+      await f.controller.stop()
+      assert.equal((await task.completion).reason,'STOP')
+      f.bot.emit('path_update',{status:'success',path:[next]})
+      f.bot.setControlState('forward',true)
+      assert.equal(f.bot.controlState.forward,false)
+    } finally { await f.close() }
+  })
+}
+test('waiting follow still trips on unsafe stationary state', async () => {
+  let unsafe=false
+  const f=fixture({manualRoute:true,readState:step=>({...dry(),entitiesObserved:!unsafe && !!step})})
+  try {
+    const task=await f.controller.handle(envelope('!sara follow'));await flush()
+    unsafe=true
+    f.bot.emit('physicsTick');await flush()
+    assert.equal((await task.completion).reason,'UNKNOWN_STATE')
+    assert.equal(f.bot.pathfinder.goal,null)
+  } finally { await f.close() }
+})
+test('failed replanning remains fail closed', async () => {
+  const f=fixture({manualRoute:true})
+  try {
+    const task=await f.controller.handle(envelope('!sara follow'));await flush()
+    f.bot.emit('path_update',{status:'noPath',path:[]})
+    assert.equal((await task.completion).reason,'UNKNOWN_STATE')
+    f.bot.setControlState('forward',true)
+    assert.equal(f.bot.controlState.forward,false)
+  } finally { await f.close() }
 })

@@ -71,9 +71,19 @@ function installMovement(bot, commanderUuid, report, options = {}) {
     }
     if (task.haltState === 'failed') throw new Error('HALT_FAILED')
   }
+  function waitingForRoute(task) {
+    return task.follow && task.goalInstalled && !task.path?.[0]
+  }
+  function clearWaitingControls() {
+    haltingDepth++
+    try { originalClear() } finally { haltingDepth-- }
+  }
   function read(task) {
     if (task.blocked === 'STATE_UNAVAILABLE') throw new Error('STATE_UNAVAILABLE')
-    return task.blocked ? (task.unsafeSnapshot ?? null) : telemetry.readState(task.path?.[0] ?? task.proposedStep)
+    // A stationary sample monitors hazards while an admitted dynamic goal waits
+    // or replans. It is never a substitute for a route step at actuation.
+    return task.blocked ? (task.unsafeSnapshot ?? null) : telemetry.readState(
+      waitingForRoute(task) ? bot.entity?.position : (task.path?.[0] ?? task.proposedStep))
   }
   function reportTrip(task, verdict) {
     if (task.tripReported) return
@@ -115,7 +125,13 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   }
   const guardedControl = (control, value) => {
     if (value === false && haltingDepth > 0) return originalControl(control, false)
-    if (guard(active)) return originalControl(control, value)
+    const task = active
+    if (task?.follow && !task.path?.[0]) {
+      if (!value) return originalControl(control, false)
+      if (waitingForRoute(task)) clearWaitingControls()
+      return
+    }
+    if (guard(task)) return originalControl(control, value)
     // Deassertions outside a task are halt operations, not ordinary navigation.
     if (!value && !active) return originalControl(control, value)
   }
@@ -155,9 +171,20 @@ function installMovement(bot, commanderUuid, report, options = {}) {
     const start = position.clone()
     const destination = target.position.clone()
     const goal = follow ? new goals.GoalFollow(target, 2) : new goals.GoalNear(destination.x, destination.y, destination.z, 2)
+    if (follow) {
+      // Pinned GoalFollow only refreshes its cached center after >2 blocks.
+      // Refresh on each changed block so a commander stepping out of range
+      // can wake an exhausted route even after a small move.
+      goal.hasChanged = () => {
+        const p = target.position.floored()
+        if (p.x === goal.x && p.y === goal.y && p.z === goal.z) return false
+        Object.assign(goal, { x: p.x, y: p.y, z: p.z })
+        return true
+      }
+    }
     return new Promise(resolve => {
       const task = { signal, cancel, start, target, destination, follow, radius: Math.min(radiusMax, 32), path: null, proposedStep: null,
-        blocked: null, finishing: false, checking: false, haltState: null }
+        blocked: null, finishing: false, checking: false, haltState: null, goalInstalled: false }
       active = task
       const finish = (verified, reason = '') => {
         if (task.finishing) return
@@ -204,6 +231,8 @@ function installMovement(bot, commanderUuid, report, options = {}) {
           if (!guard(task)) return
           // guardedGoal repeats R2 immediately before the actual goal API.
           bot.pathfinder.setGoal(goal, follow)
+          task.goalInstalled = true
+          if (follow) task.proposedStep = null
         } catch {
           if (!task.finishing) rejectMovement(task, null, 'STATE_UNAVAILABLE')
         }
@@ -223,7 +252,10 @@ function installMovement(bot, commanderUuid, report, options = {}) {
     task.proposedStep = null
     if (!Array.isArray(task.path) || result.status !== 'success' ||
         task.path.some(p => p.toBreak?.length || p.toPlace?.length)) rejectMovement(task, null, 'UNKNOWN_STATE')
-    else void check(task)
+    else {
+      if (waitingForRoute(task)) clearWaitingControls()
+      void check(task)
+    }
   }
   function pathReset(reason) {
     if (!active || active.finishing || active.haltState) return
@@ -241,6 +273,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
     if (!p || target !== task.target || p.distanceTo(task.start) > 32 || p.distanceTo(target.position) > 32) {
       task.cancel?.('MOVEMENT_BOUNDARY'); task.finish(false, 'MOVEMENT_BOUNDARY'); return
     }
+    if (waitingForRoute(task)) clearWaitingControls()
     if (guard(task) && !task.finishing && task.destination && !task.follow && p.distanceTo(task.destination) <= 2.5) task.finish(true)
     void check(task)
   }
