@@ -5,6 +5,7 @@ import { assessNavigation, NavigationSafetyMonitor } from '../navigation/safety.
 import pathfinder from 'mineflayer-pathfinder'
 import { createTelemetry, isWater } from './telemetry.js'
 import { inventoryCounts, droppedItem, nearestDrop, observeGameplay, statusText, facing } from './gameplay.js'
+import { goalRequest, runGoal } from '../inference/goal.js'
 import { isCommandCandidate, observeChatWire } from './chat-admission.js'
 
 const { Movements, goals, pathfinder: plugin } = pathfinder
@@ -14,7 +15,7 @@ export { isWater }
 
 export function commandEnvelope(packet, commanderUuid) {
   if (packet?.authenticated !== true || normalizeUuid(packet.sender) !== normalizeUuid(commanderUuid) ||
-      !movementCommands.has(parseCommand(packet.plainMessage)?.kind)) return null
+      !(movementCommands.has(parseCommand(packet.plainMessage)?.kind) || goalRequest(packet.plainMessage))) return null
   return normalizeTrustedChat({ senderUuid: commanderUuid, text: packet.plainMessage,
     isPlayerChat: true, serverAuthenticated: true, senderIdentityResolved: true })
 }
@@ -143,7 +144,8 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   bot.setControlState = guardedControl
   bot.pathfinder.setGoal = guardedGoal
 
-  function halt() {
+  function halt(cancelInference = true) {
+    if (cancelInference) cancelGoal()
     const task = active
     if (task) {
       task.blocked ??= 'HALT'
@@ -282,7 +284,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
       return { verified: !signal.aborted && !disconnected && !disposed && commanderEntity() === target && facing(bot, target) }
     },
     collect: (uuid, opts) => move(uuid, { ...opts, radiusMax: 8 }, false, true),
-    gather: async () => ({ verified: false }), returnHome: async () => ({ verified: false }), halt
+    gather: async () => ({ verified: false }), returnHome: async () => ({ verified: false }), halt: () => halt(false)
   } })
   function pathUpdate(result) {
     const task = active
@@ -338,10 +340,13 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   }
   let lastChatIndex = -1
   let commandSequence = 0
+  let goalAbort = null
+  function cancelGoal() { goalAbort?.abort(); goalAbort = null }
   async function playerChat(packet) {
     const { allowSupervisedClockSkew, ...wire } = options.chatWire.take(packet)
     if (!isCommandCandidate(packet?.plainMessage)) return
     const command = parseCommand(packet.plainMessage)
+    const request = options.inference ? goalRequest(packet.plainMessage) : null
     const index = packet.globalIndex
     const indexValid = Number.isSafeInteger(index) && index >= 0
     const checks = {
@@ -351,7 +356,7 @@ function installMovement(bot, commanderUuid, report, options = {}) {
       indexPresent: index !== undefined && index !== null,
       indexValid,
       indexFresh: indexValid && index > lastChatIndex,
-      commandParsed: movementCommands.has(command?.kind)
+      commandParsed: movementCommands.has(command?.kind) || request !== null
     }
     const signatureVerified = packet.verified === true
     const signatureAccepted = signatureVerified || (policy === 'supervised-dry' && allowSupervisedClockSkew === true)
@@ -362,13 +367,38 @@ function installMovement(bot, commanderUuid, report, options = {}) {
       return
     }
     lastChatIndex = index
-    const { kind } = command
+    const kind = request ? 'ask' : command.kind
     const sequence = ++commandSequence
+    cancelGoal()
     if (kind !== 'stop' && controller.activeTaskId !== null) {
       const previous = await controller.stop()
       if (sequence !== commandSequence || !previous.stopped) return
     }
     if (sequence !== commandSequence || disconnected || disposed) return
+    if (request) {
+      const ac = new AbortController()
+      goalAbort = ac
+      const current = () => sequence === commandSequence && !disconnected && !disposed && goalAbort === ac
+      report('goal_admitted', {})
+      try {
+        await runGoal({ request, provider: options.inference, signal: ac.signal, current,
+          observe: () => observeGameplay(bot, commanderEntity()),
+          report, reply: text => { if (current() && !ac.signal.aborted) { try { bot.chat(text) } catch {} } },
+          execute: async (text, action) => {
+            if (!current() || ac.signal.aborted) return {state:'CANCELLED'}
+            const result = await controller.handle({...envelope,text})
+            if (!current() || ac.signal.aborted) return {state:'CANCELLED'}
+            const kind = action === 'come' ? 'comeHere' : action
+            const reply = commandReply(kind,result)
+            if (reply) { try { bot.chat(reply) } catch {} }
+            if (!result.accepted) return {state:'REJECTED'}
+            if (action === 'stop') return {state:result.stopped ? 'COMPLETED' : 'FAILED'}
+            return await result.completion
+          }
+        })
+      } finally { if (goalAbort === ac) goalAbort = null }
+      return
+    }
     const result = await controller.handle(envelope)
     report('movement_command', { kind, accepted: result.accepted, stopped: result.stopped,
       reason: result.reason, haltState: result.haltState, movementStopped: false })
@@ -384,18 +414,21 @@ function installMovement(bot, commanderUuid, report, options = {}) {
   }
   function stateChanged() { if (active) void check(active) }
   function end() {
+    cancelGoal()
     disconnected = true
     if (active) { active.cancel?.('DISCONNECTED'); active?.finish(false, 'DISCONNECTED') }
     try { halt() } catch {}
     dispose()
   }
   function shutdown() {
+    cancelGoal()
     disconnected = true
     commandSequence++
     if (active) { active.cancel?.('SHUTDOWN'); active?.finish(false, 'SHUTDOWN') }
     try { halt() } catch {}
   }
   function dispose() {
+    cancelGoal()
     if (disposed) return
     disposed = true
     bot._client.removeListener('playerChat', onPlayerChat)

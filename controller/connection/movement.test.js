@@ -11,7 +11,7 @@ const envelope = text => ({ source: 'authenticated_player_chat', senderUuid: uui
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve() }
 const dry = () => ({ air: 300, inWater: false, nextStepInWater: false, entitiesObserved: true,
   creeperDistance: null, sampledAt: Date.now(), observedAt: Date.now() })
-function fixture({ readState = dry, report, limits = {}, preplan, policy, manualRoute = false } = {}) {
+function fixture({ readState = dry, report, limits = {}, preplan, policy, manualRoute = false, inference } = {}) {
   const bot = new EventEmitter()
   bot._client = new EventEmitter(); bot._client.cipher = {}
   bot.entity = { id: 1, position: new Vec3(0.5, 1, 0.5), velocity: new Vec3(0, 0, 0), onGround: true, isInWater: false }
@@ -40,7 +40,7 @@ function fixture({ readState = dry, report, limits = {}, preplan, policy, manual
   const movements = { blocksToAvoid: new Set(), exclusionAreasStep: [] }
   const shutdown = new AbortController()
   const halt = enableMovement(bot, uuid, report ?? ((event, detail) => reports.push({ event, ...detail })), {
-    policy, telemetry: { readState, dispose() {} }, movements, signal: shutdown.signal,
+    policy, inference, telemetry: { readState, dispose() {} }, movements, signal: shutdown.signal,
     controllerOptions: { limits: { haltMs: 20, stopWaitMs: 20, ...limits } }, readTimeoutMs: 10, haltTimeoutMs: 10
   })
   return { bot, acts, reports, halt, controller: halt.controller, shutdown,
@@ -530,5 +530,62 @@ test('authenticated gameplay status, look and pickup require observed effects', 
     f.bot.emit('physicsTick');await flush()
     assert.equal(f.reports.find(r=>r.event==='gameplay_pickup').delta,1)
     assert.equal(f.controller.activeTaskId,null)
+  } finally {await f.close()}
+})
+
+test('authenticated ask uses fresh observations, direct STOP discards late inference', async () => {
+  let resolveLate, calls=0
+  const prompts=[]
+  const f=fixture({inference:{propose:async prompt=>{
+    prompts.push(JSON.parse(prompt)); calls++
+    if(calls===1)return {action:'look'}
+    if(calls===2)return {action:'chat',text:'Done looking.'}
+    return new Promise(resolve=>{resolveLate=resolve})
+  }}})
+  try {
+    f.bot.entities={1:f.bot.entity};f.bot.health=20
+    f.bot.inventory={items:()=>[]}
+    f.bot.entity.eyeHeight=1.62
+    f.bot.lookAt=async q=>{
+      const d=q.minus(f.bot.entity.position.offset(0,1.62,0))
+      f.bot.entity.yaw=Math.atan2(-d.x,-d.z);f.bot.entity.pitch=Math.atan2(d.y,Math.hypot(d.x,d.z))
+    }
+    f.packet('!sara ask face me',1,{verified:false});await flush()
+    assert.equal(calls,0)
+    f.packet('!sara ask face me',1);await flush()
+    assert.equal(calls,2)
+    assert.deepEqual(prompts[1].history,[{action:'look',result:'COMPLETED'}])
+    assert.ok(f.acts.some(a=>a[0]==='chat'&&a[1]==='Done looking.'))
+    f.packet('!sara ask walk to me',2);await flush()
+    assert.equal(calls,3)
+    f.packet('!sara stop',3);await flush()
+    resolveLate({action:'come'});await flush()
+    assert.equal(f.bot.pathfinder.goal,null)
+    assert.equal(f.controller.activeTaskId,null)
+    assert.equal(f.acts.some(([k,v])=>k==='goal'&&v!==null),false)
+  } finally {await f.close()}
+})
+
+test('model STOP acknowledges and records outcome without another proposal', async () => {
+  let calls=0
+  const f=fixture({inference:{propose:async()=>{calls++;return {action:'stop'}}}})
+  try {
+    f.bot.entities={1:f.bot.entity}; f.bot.health=20; f.bot.inventory={items:()=>[]}
+    f.packet('!sara ask stop moving',1); await flush()
+    assert.equal(calls,1)
+    assert.ok(f.acts.some(([k,v])=>k==='chat'&&v.startsWith('Halt acknowledged')))
+    assert.ok(f.reports.some(r=>r.event==='goal_action'&&r.action==='stop'&&r.state==='COMPLETED'))
+    assert.ok(f.reports.some(r=>r.event==='goal_end'))
+    assert.equal(f.controller.activeTaskId,null)
+  } finally { await f.close() }
+})
+test('throwing model reply does not disable deterministic gameplay',async()=>{
+  const f=fixture({inference:{propose:async()=>({action:'chat',text:'Hello'})}})
+  try {
+    f.bot.entities={1:f.bot.entity};f.bot.health=20;f.bot.inventory={items:()=>[]}
+    f.bot.chat=()=>{throw Error('chat unavailable')}
+    f.packet('!sara ask hello',1);await flush()
+    f.packet('!sara come',2);await flush()
+    assert.ok(f.bot.pathfinder.goal)
   } finally {await f.close()}
 })
