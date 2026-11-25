@@ -2,13 +2,15 @@
 
 ![SaraCraft banner featuring a pixel-art engineer in a Minecraft-inspired workshop](branding/saracraft-project-banner.png)
 
-A private Minecraft Java AI companion for cooperative survival, powered by local Ollama inference.
+A private Minecraft Java AI companion for cooperative survival, designed for local Ollama inference.
 
 ## MVP roadmap
 
 [Zero-to-local MVP roadmap](docs/mvp-roadmap.md) defines the proposed scope, ordered milestones, acceptance criteria and exclusions. [MVP issues](https://github.com/danielbrownjr/saracraft/issues?q=is%3Aissue+label%3Amvp) track execution. Prior implementations and historical evidence are retained; progress is reconciled against the new acceptance criteria rather than assumed or rebuilt.
 
 The MVP is a locally inferred companion that understands authenticated natural-language requests, observes bounded game state, and executes a small allowlist of actions in a shared private world. No hosted inference or cloud fallback.
+
+Current state: connection demonstrated; live command admission, model integration and gameplay acceptance remain unverified.
 
 ## Design choices
 
