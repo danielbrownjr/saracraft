@@ -55,7 +55,7 @@ export function facing(bot, target) {
   if (!validPosition(p) || !validPosition(q)) return false
   const yaw = bot.entity.yaw, pitch = bot.entity.pitch
   if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) return false
-  const dx=q.x-p.x, dy=q.y+(target.height??1.6)*0.9-p.y-(bot.entity.height??1.8), dz=q.z-p.z
+  const dx=q.x-p.x, dy=q.y+(target.height??1.6)*0.9-p.y-(bot.entity.eyeHeight??1.62), dz=q.z-p.z
   const norm=Math.hypot(dx,dy,dz)
   if (!norm) return false
   const dot=(-Math.sin(yaw)*Math.cos(pitch)*dx+Math.sin(pitch)*dy-Math.cos(yaw)*Math.cos(pitch)*dz)/norm
