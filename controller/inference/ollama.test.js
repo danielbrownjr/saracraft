@@ -13,6 +13,13 @@ for (const action of ['follow','come','stop','look','collect','chat']) {
       const body=JSON.parse(opts.body)
       assert.equal(body.model,'test:1b')
       assert.equal(body.stream,false)
+      assert.deepEqual(body.format.anyOf,[
+        {type:'object',additionalProperties:false,required:['action'],properties:{action:{enum:['follow','come','stop','look','collect']}}},
+        {type:'object',additionalProperties:false,required:['action','text'],properties:{action:{const:'chat'},text:{type:'string',minLength:1,maxLength:200}}}
+      ])
+      assert.deepEqual(body.options,{temperature:0,num_predict:256,num_ctx:2048})
+      assert.equal(body.messages[0].role,'system')
+      assert.ok(body.messages[0].content.includes(JSON.stringify(body.format)))
       assert.equal(body.messages[1].content,'request')
       return response(expected)
     })
@@ -43,7 +50,12 @@ test('reject non-success response',async()=>assert.rejects(client(async()=>new R
 test('reject incomplete envelope',async()=>assert.rejects(client(async()=>new Response('{"done":false}')).propose('x'),/INVALID_RESPONSE/))
 test('reject malformed envelope',async()=>assert.rejects(client(async()=>new Response('{')).propose('x'),/INVALID_RESPONSE/))
 test('reject oversized body even with no content-length',async()=>assert.rejects(client(async()=>new Response('x'.repeat(16385))).propose('x'),/RESPONSE_TOO_LARGE/))
-test('reject oversized declared length',async()=>assert.rejects(client(async()=>new Response('x',{headers:{'content-length':'16385'}})).propose('x'),/RESPONSE_TOO_LARGE/))
+test('reject oversized declared length and cancel body',async()=>{
+  let cancelled=false
+  const body=new ReadableStream({cancel(){cancelled=true}})
+  await assert.rejects(client(async()=>new Response(body,{headers:{'content-length':'16385'}})).propose('x'),/RESPONSE_TOO_LARGE/)
+  assert.equal(cancelled,true)
+})
 test('pre-aborted caller makes no request',async()=>{
   const ac=new AbortController();ac.abort()
   await assert.rejects(client(()=>assert.fail('fetch invoked')).propose('x',ac.signal),/CANCELLED_OR_TIMEOUT/)
